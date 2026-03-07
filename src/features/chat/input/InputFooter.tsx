@@ -77,7 +77,7 @@ export const InputFooter = memo(function InputFooter({
 
   return (
     <div
-      className="relative flex items-center justify-center gap-2 text-[11px] leading-none text-text-500"
+      className="relative flex h-full w-full items-center justify-center gap-2 text-[11px] leading-none text-text-500"
       ref={popoverRef}
     >
       {/* Fast-forward toggle */}
@@ -215,7 +215,7 @@ function PopoverPanel({ inputContainerRef, children }: {
     <div
       ref={ref}
       style={style}
-      className="absolute bottom-full mb-2 bg-bg-100 border border-border-200/50 rounded-2xl shadow-2xl shadow-black/20 overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-150 z-50"
+      className="absolute bottom-full bg-bg-100 border border-border-200/50 rounded-2xl shadow-2xl shadow-black/20 overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-150 z-50"
     >
       {children}
     </div>
