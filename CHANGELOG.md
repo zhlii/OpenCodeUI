@@ -1,5 +1,11 @@
 # Changelog
 
+## [v0.1.10] - 2026-03-08
+
+- fix: harden session message sync and failed sends (b788dce)
+- chore: add validated release preparation flow (010ffbe)
+- docs: consolidate v0.1.9 release notes (79113da)
+
 ## [v0.1.9] - 2026-03-08
 
 - fix: restore message attachment expand animation (2975fe3)
