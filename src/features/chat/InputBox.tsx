@@ -361,6 +361,12 @@ function InputBoxComponent({
     setShowAttachmentRightFade(prev => (prev === nextRightFade ? prev : nextRightFade))
   }, [])
 
+  const resetAttachmentRailState = useCallback(() => {
+    setAttachmentsOverflowing(false)
+    setShowAttachmentLeftFade(false)
+    setShowAttachmentRightFade(false)
+  }, [])
+
   const handleAttachmentRailWheel = useCallback(
     (e: React.WheelEvent<HTMLDivElement>) => {
       const el = attachmentRailRef.current
@@ -387,19 +393,22 @@ function InputBoxComponent({
 
     if (!el || attachments.length === 0) {
       prevAttachmentCountRef.current = 0
-      setAttachmentsOverflowing(false)
-      setShowAttachmentLeftFade(false)
-      setShowAttachmentRightFade(false)
-      return
+      const frameId = requestAnimationFrame(() => resetAttachmentRailState())
+      return () => cancelAnimationFrame(frameId)
     }
 
-    let frameId = requestAnimationFrame(() => {
+    const frameId = requestAnimationFrame(() => {
       const attachmentCountIncreased = attachments.length > prevAttachmentCountRef.current
       if (attachmentCountIncreased) {
-        el.scrollTo({
-          left: el.scrollWidth,
-          behavior: prevAttachmentCountRef.current === 0 ? 'auto' : 'smooth',
-        })
+        const nextLeft = el.scrollWidth
+        if (typeof el.scrollTo === 'function') {
+          el.scrollTo({
+            left: nextLeft,
+            behavior: prevAttachmentCountRef.current === 0 ? 'auto' : 'smooth',
+          })
+        } else {
+          el.scrollLeft = nextLeft
+        }
       }
       syncAttachmentRailState()
       prevAttachmentCountRef.current = attachments.length
@@ -418,7 +427,7 @@ function InputBoxComponent({
       ro.disconnect()
       window.removeEventListener('resize', measure)
     }
-  }, [attachments.length, syncAttachmentRailState])
+  }, [attachments.length, resetAttachmentRailState, syncAttachmentRailState])
 
   // 计算
   const canSend = (text.trim().length > 0 || attachments.length > 0) && !disabled
