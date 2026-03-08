@@ -2,13 +2,10 @@
 
 ## [v0.1.9] - 2026-03-08
 
-- fix: harden composer attachment rail scrolling (b2bac29)
-
-## [v0.1.8] - 2026-03-08
-
 - fix: restore message attachment expand animation (2975fe3)
 - fix: streamline composer attachment rail interactions (99db58a)
 - fix: constrain expanded attachments and preserve composer blank lines (dd2d7ba)
+- fix: harden composer attachment rail scrolling (b2bac29)
 
 ## [v0.1.7] - 2026-03-08
 
