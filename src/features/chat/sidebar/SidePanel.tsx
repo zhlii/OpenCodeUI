@@ -353,7 +353,7 @@ export function SidePanel({
 
           {/* Active Sessions Tab */}
           {sidebarTab === 'active' && (
-            <div className="flex-1 overflow-y-auto custom-scrollbar py-2">
+            <div className="flex-1 overflow-y-auto custom-scrollbar px-2 py-2">
               {busySessions.length === 0 && notifications.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-12 text-text-400 opacity-60">
                   <p className="text-xs">No active sessions</p>
