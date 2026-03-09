@@ -1,6 +1,5 @@
 import { useCallback, useMemo, useState, useEffect, useRef } from 'react'
 import { SessionList } from '../../sessions'
-import { FolderRecentList } from './FolderRecentList'
 import { ShareDialog } from '../ShareDialog'
 import { ContextDetailsDialog } from './ContextDetailsDialog'
 import {
@@ -19,19 +18,17 @@ import { CircularProgress } from '../../../components/CircularProgress'
 import { useDirectory, useSessionStats, formatTokens, formatCost, useKeybindingLabel } from '../../../hooks'
 import type { ThemeMode } from '../../../hooks'
 import { useSessionContext } from '../../../contexts/useSessionContext'
-import { useLayoutStore, useMessageStore } from '../../../store'
+import { useMessageStore } from '../../../store'
 import { useBusySessions, useBusyCount } from '../../../store/activeSessionStore'
 import { notificationStore, useNotifications, useUnreadNotificationCount } from '../../../store/notificationStore'
 import type { NotificationEntry } from '../../../store/notificationStore'
 import {
   updateSession,
-  deleteSession as apiDeleteSession,
   getSession,
   subscribeToConnectionState,
   type ApiSession,
   type ConnectionInfo,
 } from '../../../api'
-import { isSameDirectory } from '../../../utils'
 import { uiErrorHandler } from '../../../utils'
 import type { SessionStats } from '../../../hooks'
 
@@ -57,13 +54,6 @@ interface SidePanelProps {
   onToggleWideMode?: () => void
 }
 
-interface ProjectItem {
-  id: string
-  worktree: string
-  name: string
-  canReorder?: boolean
-}
-
 export function SidePanel({
   onNewSession,
   onSelectSession,
@@ -79,8 +69,7 @@ export function SidePanel({
   isWideMode,
   onToggleWideMode,
 }: SidePanelProps) {
-  const { currentDirectory, savedDirectories, addDirectory, reorderDirectories, recentProjects } = useDirectory()
-  const { sidebarFolderRecents } = useLayoutStore()
+  const { currentDirectory, addDirectory } = useDirectory()
   const [connectionState, setConnectionState] = useState<ConnectionInfo | null>(null)
   const [sidebarTab, setSidebarTab] = useState<'recents' | 'active'>('recents')
 
@@ -159,65 +148,6 @@ export function SidePanel({
     }
   }, [busySessions, notifications, sessionLookup])
 
-  const projects = useMemo<ProjectItem[]>(() => {
-    const list: ProjectItem[] = [
-      {
-        id: 'global',
-        worktree: 'All projects',
-        name: 'Global',
-      },
-    ]
-    // 按最近使用时间排序，最近使用的排最前
-    const sorted = [...savedDirectories].sort((a, b) => {
-      const aTime = recentProjects[a.path] || a.addedAt
-      const bTime = recentProjects[b.path] || b.addedAt
-      return bTime - aTime
-    })
-    sorted.forEach(d => {
-      list.push({
-        id: d.path,
-        worktree: d.path,
-        name: d.name,
-      })
-    })
-    return list
-  }, [savedDirectories, recentProjects])
-
-  const currentProject = useMemo<ProjectItem>(() => {
-    if (!currentDirectory) return projects[0]
-    const found = projects.find(p => isSameDirectory(p.id, currentDirectory))
-    if (found) return found
-
-    // 未保存的目录，从路径提取名称并解码
-    const rawName = currentDirectory.split(/[/\\]/).pop() || currentDirectory
-    let decodedName = rawName
-    try {
-      decodedName = decodeURIComponent(rawName)
-    } catch {
-      // 解码失败就用原值
-    }
-    return {
-      id: currentDirectory,
-      worktree: currentDirectory,
-      name: decodedName,
-    }
-  }, [currentDirectory, projects])
-
-  const folderProjects = useMemo<ProjectItem[]>(() => {
-    const list = savedDirectories.map<ProjectItem>(directory => ({
-      id: directory.path,
-      worktree: directory.path,
-      name: directory.name,
-      canReorder: true,
-    }))
-
-    if (currentDirectory && !list.some(project => isSameDirectory(project.worktree, currentDirectory))) {
-      list.push({ ...currentProject, canReorder: false })
-    }
-
-    return list
-  }, [savedDirectories, currentDirectory, currentProject])
-
   const handleSelect = useCallback(
     (session: ApiSession) => {
       // Global 模式下，点击 session 自动切换到该 session 的工作目录并添加到项目列表
@@ -267,35 +197,6 @@ export function SidePanel({
       }
     },
     [deleteSession, onNewSession, selectedSessionId],
-  )
-
-  const handleRenameFolderSession = useCallback(
-    async (session: ApiSession, newTitle: string) => {
-      try {
-        await updateSession(session.id, { title: newTitle }, session.directory)
-        if (!currentDirectory || isSameDirectory(currentDirectory, session.directory)) {
-          await refresh()
-        }
-      } catch (e) {
-        uiErrorHandler('rename session', e)
-      }
-    },
-    [currentDirectory, refresh],
-  )
-
-  const handleDeleteFolderSession = useCallback(
-    async (session: ApiSession) => {
-      await apiDeleteSession(session.id, session.directory)
-
-      if (!currentDirectory || isSameDirectory(currentDirectory, session.directory)) {
-        await refresh()
-      }
-
-      if (selectedSessionId === session.id) {
-        onNewSession()
-      }
-    },
-    [currentDirectory, onNewSession, refresh, selectedSessionId],
   )
 
   // 统一的结构，通过 CSS 控制显示/隐藏
@@ -429,37 +330,24 @@ export function SidePanel({
           {/* Recents Tab */}
           {sidebarTab === 'recents' && (
             <div className="flex-1 overflow-hidden">
-              {sidebarFolderRecents && !search ? (
-                <FolderRecentList
-                  projects={folderProjects}
-                  currentDirectory={currentDirectory}
-                  selectedSessionId={selectedSessionId}
-                  onSelectSession={handleSelectActive}
-                  onRenameSession={handleRenameFolderSession}
-                  onDeleteSession={handleDeleteFolderSession}
-                  onReorderProject={reorderDirectories}
-                />
-              ) : (
-                <SessionList
-                  sessions={sessions}
-                  selectedId={selectedSessionId}
-                  isLoading={isLoading}
-                  isLoadingMore={isLoadingMore}
-                  hasMore={hasMore}
-                  search={search}
-                  onSearchChange={setSearch}
-                  onSelect={handleSelect}
-                  onDelete={handleDeleteSession}
-                  onRename={handleRename}
-                  onLoadMore={loadMore}
-                  onNewChat={onNewSession}
-                  showHeader={false}
-                  grouped={false}
-                  density="compact"
-                  showStats
-                  showDirectory={!currentDirectory}
-                />
-              )}
+              <SessionList
+                sessions={sessions}
+                selectedId={selectedSessionId}
+                isLoading={isLoading}
+                isLoadingMore={isLoadingMore}
+                hasMore={hasMore}
+                search={search}
+                onSearchChange={setSearch}
+                onSelect={handleSelect}
+                onDelete={handleDeleteSession}
+                onRename={handleRename}
+                onLoadMore={loadMore}
+                onNewChat={onNewSession}
+                showHeader={false}
+                grouped={false}
+                density="compact"
+                showStats
+              />
             </div>
           )}
 
