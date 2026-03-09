@@ -329,7 +329,7 @@ export function SidePanel({
 
           {/* Recents Tab */}
           {sidebarTab === 'recents' && (
-            <div className="flex-1 overflow-hidden">
+            <div className="flex-1 overflow-hidden px-2 py-2">
               <SessionList
                 sessions={sessions}
                 selectedId={selectedSessionId}
