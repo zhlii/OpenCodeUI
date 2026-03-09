@@ -40,8 +40,6 @@ export default defineConfig({
     allowedHosts: true,
 
     proxy: {
-      // 开发环境代理 - 将 /api 前缀的请求转发到 OpenCode 后端
-      // 注意：Tauri 模式下前端直接请求后端（通过 plugin-http），不走此代理
       '/api': {
         target: 'http://127.0.0.1:4096',
         changeOrigin: true,
