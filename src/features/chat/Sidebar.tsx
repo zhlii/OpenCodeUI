@@ -70,10 +70,6 @@ export const Sidebar = memo(function Sidebar({
     [addDirectory, isMobile, onOpen],
   )
 
-  const openProjectDialog = useCallback(() => {
-    setIsProjectDialogOpen(true)
-  }, [])
-
   const closeProjectDialog = useCallback(() => {
     setIsProjectDialogOpen(false)
     onProjectDialogClose?.()
@@ -235,7 +231,6 @@ export const Sidebar = memo(function Sidebar({
             onSelectSession={handleSelectSession}
             onCloseMobile={onClose}
             selectedSessionId={selectedSessionId}
-            onAddProject={openProjectDialog}
             isMobile={true}
             isExpanded={true} // 移动端展开时始终是 expanded 状态
             onToggleSidebar={onClose} // 移动端 toggle 就是关闭
@@ -278,7 +273,6 @@ export const Sidebar = memo(function Sidebar({
           onSelectSession={onSelectSession}
           onCloseMobile={onClose}
           selectedSessionId={selectedSessionId}
-          onAddProject={openProjectDialog}
           isMobile={false}
           isExpanded={isOpen}
           onToggleSidebar={handleToggle}

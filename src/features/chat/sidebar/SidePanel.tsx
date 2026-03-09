@@ -1,17 +1,12 @@
 import { useCallback, useMemo, useState, useEffect, useRef } from 'react'
 import { SessionList } from '../../sessions'
 import { FolderRecentList } from './FolderRecentList'
-import { ConfirmDialog } from '../../../components/ui/ConfirmDialog'
 import { ShareDialog } from '../ShareDialog'
 import { ContextDetailsDialog } from './ContextDetailsDialog'
 import {
   SidebarIcon,
-  FolderIcon,
-  GlobeIcon,
   PlusIcon,
-  TrashIcon,
   SearchIcon,
-  ChevronDownIcon,
   CogIcon,
   SunIcon,
   MoonIcon,
@@ -40,19 +35,6 @@ import { isSameDirectory } from '../../../utils'
 import { uiErrorHandler } from '../../../utils'
 import type { SessionStats } from '../../../hooks'
 
-// 获取路径的父目录部分（用于显示项目位置）
-function getParentPath(fullPath: string): string {
-  // 处理 Windows 和 Unix 路径
-  const sep = fullPath.includes('\\') ? '\\' : '/'
-  const parts = fullPath.split(sep)
-  // 移除最后一个部分（文件夹名本身）
-  parts.pop()
-  if (parts.length === 0) return sep
-  // Windows: 保留盘符，Unix: 保留开头的 /
-  const parent = parts.join(sep)
-  return parent || sep
-}
-
 // 侧边栏设计模式：
 // - 按钮结构统一，不因 expanded/collapsed 改变 DOM
 // - 按钮内容使用 -translate-x-2 让图标在收起时居中
@@ -64,7 +46,6 @@ interface SidePanelProps {
   onSelectSession: (session: ApiSession) => void
   onCloseMobile?: () => void
   selectedSessionId: string | null
-  onAddProject: () => void
   isMobile?: boolean
   isExpanded?: boolean
   onToggleSidebar: () => void
@@ -88,7 +69,6 @@ export function SidePanel({
   onSelectSession,
   onCloseMobile,
   selectedSessionId,
-  onAddProject,
   isMobile = false,
   isExpanded = true,
   onToggleSidebar,
@@ -99,22 +79,9 @@ export function SidePanel({
   isWideMode,
   onToggleWideMode,
 }: SidePanelProps) {
-  const {
-    currentDirectory,
-    savedDirectories,
-    setCurrentDirectory,
-    removeDirectory,
-    addDirectory,
-    reorderDirectories,
-    recentProjects,
-  } = useDirectory()
+  const { currentDirectory, savedDirectories, addDirectory, reorderDirectories, recentProjects } = useDirectory()
   const { sidebarFolderRecents } = useLayoutStore()
   const [connectionState, setConnectionState] = useState<ConnectionInfo | null>(null)
-  const [projectDeleteConfirm, setProjectDeleteConfirm] = useState<{ isOpen: boolean; projectId: string | null }>({
-    isOpen: false,
-    projectId: null,
-  })
-  const [projectsExpanded, setProjectsExpanded] = useState(false)
   const [sidebarTab, setSidebarTab] = useState<'recents' | 'active'>('recents')
 
   const showLabels = isExpanded || isMobile
@@ -251,25 +218,6 @@ export function SidePanel({
     return list
   }, [savedDirectories, currentDirectory, currentProject])
 
-  const handleSelectProject = useCallback(
-    (projectId: string) => {
-      if (projectId === 'global') {
-        setCurrentDirectory(undefined)
-      } else {
-        setCurrentDirectory(projectId)
-      }
-      setProjectsExpanded(false)
-    },
-    [setCurrentDirectory],
-  )
-
-  const handleRemoveProject = useCallback(
-    (projectId: string) => {
-      removeDirectory(projectId)
-    },
-    [removeDirectory],
-  )
-
   const handleSelect = useCallback(
     (session: ApiSession) => {
       // Global 模式下，点击 session 自动切换到该 session 的工作目录并添加到项目列表
@@ -350,20 +298,6 @@ export function SidePanel({
     [currentDirectory, onNewSession, refresh, selectedSessionId],
   )
 
-  useEffect(() => {
-    let frameId: number | null = null
-
-    if (!isExpanded) {
-      frameId = requestAnimationFrame(() => {
-        setProjectsExpanded(false)
-      })
-    }
-
-    return () => {
-      if (frameId !== null) cancelAnimationFrame(frameId)
-    }
-  }, [isExpanded])
-
   // 统一的结构，通过 CSS 控制显示/隐藏
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -427,101 +361,6 @@ export function SidePanel({
             {newChatShortcut}
           </span>
         </button>
-
-        {/* Project Selector - 只在展开时显示 */}
-        {showLabels && (
-          <button
-            onClick={() => setProjectsExpanded(!projectsExpanded)}
-            className={`h-8 flex items-center rounded-lg active:scale-[0.98] transition-all duration-300 overflow-hidden ${
-              projectsExpanded ? 'bg-bg-200 text-text-100' : 'text-text-300 hover:text-text-100 hover:bg-bg-200'
-            }`}
-            style={{ paddingLeft: 6, paddingRight: 6 }}
-            title={currentProject?.name || 'Global'}
-          >
-            <span className="size-5 flex items-center justify-center shrink-0">
-              {currentProject?.id === 'global' ? (
-                <GlobeIcon size={16} className="text-accent-main-100" />
-              ) : (
-                <FolderIcon size={16} />
-              )}
-            </span>
-            <span className="ml-2 text-sm truncate">{currentProject?.name || 'Global'}</span>
-            <ChevronDownIcon
-              size={14}
-              className={`ml-auto text-text-400 transition-transform duration-200 shrink-0 ${projectsExpanded ? '' : '-rotate-90'}`}
-            />
-          </button>
-        )}
-
-        {/* Projects Dropdown */}
-        <div
-          className="overflow-hidden transition-all duration-300 ease-out"
-          style={{
-            maxHeight: showLabels && projectsExpanded ? 300 : 0,
-            opacity: showLabels && projectsExpanded ? 1 : 0,
-            marginTop: showLabels && projectsExpanded ? 4 : 0,
-          }}
-        >
-          <div className="rounded-lg border border-border-200/50 bg-bg-100/80 overflow-hidden">
-            <div className="max-h-48 overflow-y-auto custom-scrollbar py-1">
-              {projects.map(project => {
-                const isGlobal = project.id === 'global'
-                const isActive = currentProject?.id === project.id
-                return (
-                  <div
-                    key={project.id}
-                    onClick={() => handleSelectProject(project.id)}
-                    role="button"
-                    tabIndex={0}
-                    onKeyDown={e => {
-                      if (e.key === 'Enter' || e.key === ' ') {
-                        e.preventDefault()
-                        handleSelectProject(project.id)
-                      }
-                    }}
-                    className={`group w-full flex items-center gap-2 px-2 py-1.5 transition-colors cursor-pointer ${
-                      isActive ? 'bg-bg-200/60 text-text-100' : 'text-text-300 hover:text-text-100 hover:bg-bg-200/50'
-                    }`}
-                    title={project.worktree}
-                  >
-                    <span className="w-5 h-5 flex items-center justify-center shrink-0">
-                      {isGlobal ? <GlobeIcon size={14} className="text-accent-main-100" /> : <FolderIcon size={14} />}
-                    </span>
-                    <div className="flex-1 min-w-0 text-left">
-                      <div className="text-xs truncate">{project.name}</div>
-                      {!isGlobal && project.worktree && (
-                        <div className="text-[10px] text-text-400 truncate font-mono opacity-70">
-                          {getParentPath(project.worktree)}
-                        </div>
-                      )}
-                    </div>
-                    {!isGlobal && (
-                      <button
-                        onClick={e => {
-                          e.stopPropagation()
-                          setProjectDeleteConfirm({ isOpen: true, projectId: project.id })
-                        }}
-                        className="p-1 rounded text-text-400 hover:text-danger-100 hover:bg-danger-100/10 md:opacity-0 md:group-hover:opacity-100 transition-all"
-                        title="Remove"
-                      >
-                        <TrashIcon size={12} />
-                      </button>
-                    )}
-                  </div>
-                )
-              })}
-            </div>
-            <div className="border-t border-border-200/50 p-1">
-              <button
-                onClick={onAddProject}
-                className="w-full flex items-center gap-2 px-2 py-1.5 rounded text-xs text-text-400 hover:text-text-100 hover:bg-bg-200/50 transition-colors"
-              >
-                <PlusIcon size={14} />
-                Add project...
-              </button>
-            </div>
-          </div>
-        </div>
       </div>
 
       {/* ===== Main Content ===== */}
@@ -707,22 +546,6 @@ export function SidePanel({
         onThemeChange={onThemeChange}
         isWideMode={isWideMode}
         onToggleWideMode={onToggleWideMode}
-      />
-
-      {/* Confirm Dialog */}
-      <ConfirmDialog
-        isOpen={projectDeleteConfirm.isOpen}
-        onClose={() => setProjectDeleteConfirm({ isOpen: false, projectId: null })}
-        onConfirm={() => {
-          if (projectDeleteConfirm.projectId) {
-            handleRemoveProject(projectDeleteConfirm.projectId)
-          }
-          setProjectDeleteConfirm({ isOpen: false, projectId: null })
-        }}
-        title="Remove Project"
-        description="Remove this project folder from the list? Files won't be deleted."
-        confirmText="Remove"
-        variant="danger"
       />
     </div>
   )
