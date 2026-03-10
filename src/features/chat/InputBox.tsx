@@ -13,6 +13,7 @@ import { InputToolbar } from './input/InputToolbar'
 import { InputFooter } from './input/InputFooter'
 import { UndoStatus } from './input/UndoStatus'
 import { useMobileCollapse } from './input/useMobileCollapse'
+import { useAttachmentRail } from './input/useAttachmentRail'
 import { TEXT_STYLE, detectSlashTrigger, isFileSupported, ensureFileMime, readFileAsDataUrl } from './input/inputUtils'
 import { keybindingStore, matchesKeybinding } from '../../store/keybindingStore'
 import { useMessages } from '../../store/messageStoreHooks'
@@ -168,10 +169,15 @@ function InputBoxComponent({
   const prevRevertedTextRef = useRef<string | undefined>(undefined)
   const latestDraftRef = useRef<HistoryEntry>({ text: '', attachments: [] })
   const contentWrapRef = useRef<HTMLDivElement>(null)
-  const [attachmentsOverflowing, setAttachmentsOverflowing] = useState(false)
-  const [showAttachmentLeftFade, setShowAttachmentLeftFade] = useState(false)
-  const [showAttachmentRightFade, setShowAttachmentRightFade] = useState(false)
-  const prevAttachmentCountRef = useRef(0)
+
+  // 附件横向轨道
+  const {
+    overflowing: attachmentsOverflowing,
+    showLeftFade: showAttachmentLeftFade,
+    showRightFade: showAttachmentRightFade,
+    handleScroll: syncAttachmentRailState,
+    handleWheel: handleAttachmentRailWheel,
+  } = useAttachmentRail({ attachmentCount: attachments.length, railRef: attachmentRailRef })
 
   // ============================================
   // 历史消息导航（类终端体验）
@@ -309,92 +315,6 @@ function InputBoxComponent({
     const maxH = isMobile ? Math.max(80, viewportH - 48 - 100 - 72) : viewportH * 0.35
     textarea.style.height = Math.max(24, Math.min(scrollHeight, maxH)) + 'px'
   }, [text, isMobile])
-
-  const syncAttachmentRailState = useCallback(() => {
-    const el = attachmentRailRef.current
-    if (!el) {
-      setAttachmentsOverflowing(false)
-      setShowAttachmentLeftFade(false)
-      setShowAttachmentRightFade(false)
-      return
-    }
-
-    const nextOverflow = el.scrollWidth > el.clientWidth + 1
-    const nextLeftFade = nextOverflow && el.scrollLeft > 2
-    const nextRightFade = nextOverflow && el.scrollLeft + el.clientWidth < el.scrollWidth - 2
-
-    setAttachmentsOverflowing(prev => (prev === nextOverflow ? prev : nextOverflow))
-    setShowAttachmentLeftFade(prev => (prev === nextLeftFade ? prev : nextLeftFade))
-    setShowAttachmentRightFade(prev => (prev === nextRightFade ? prev : nextRightFade))
-  }, [])
-
-  const resetAttachmentRailState = useCallback(() => {
-    setAttachmentsOverflowing(false)
-    setShowAttachmentLeftFade(false)
-    setShowAttachmentRightFade(false)
-  }, [])
-
-  const handleAttachmentRailWheel = useCallback(
-    (e: React.WheelEvent<HTMLDivElement>) => {
-      const el = attachmentRailRef.current
-      if (!el) return
-
-      const maxScrollLeft = el.scrollWidth - el.clientWidth
-      if (maxScrollLeft <= 1) return
-
-      const dominantDelta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY
-      if (Math.abs(dominantDelta) < 0.5) return
-
-      const nextScrollLeft = Math.max(0, Math.min(el.scrollLeft + dominantDelta, maxScrollLeft))
-      if (Math.abs(nextScrollLeft - el.scrollLeft) < 1) return
-
-      e.preventDefault()
-      el.scrollLeft = nextScrollLeft
-      syncAttachmentRailState()
-    },
-    [syncAttachmentRailState],
-  )
-
-  useEffect(() => {
-    const el = attachmentRailRef.current
-
-    if (!el || attachments.length === 0) {
-      prevAttachmentCountRef.current = 0
-      const frameId = requestAnimationFrame(() => resetAttachmentRailState())
-      return () => cancelAnimationFrame(frameId)
-    }
-
-    const frameId = requestAnimationFrame(() => {
-      const attachmentCountIncreased = attachments.length > prevAttachmentCountRef.current
-      if (attachmentCountIncreased) {
-        const nextLeft = el.scrollWidth
-        if (typeof el.scrollTo === 'function') {
-          el.scrollTo({
-            left: nextLeft,
-            behavior: prevAttachmentCountRef.current === 0 ? 'auto' : 'smooth',
-          })
-        } else {
-          el.scrollLeft = nextLeft
-        }
-      }
-      syncAttachmentRailState()
-      prevAttachmentCountRef.current = attachments.length
-    })
-
-    const measure = () => syncAttachmentRailState()
-    const ro = new ResizeObserver(measure)
-    ro.observe(el)
-    if (el.firstElementChild instanceof HTMLElement) {
-      ro.observe(el.firstElementChild)
-    }
-    window.addEventListener('resize', measure)
-
-    return () => {
-      cancelAnimationFrame(frameId)
-      ro.disconnect()
-      window.removeEventListener('resize', measure)
-    }
-  }, [attachments.length, resetAttachmentRailState, syncAttachmentRailState])
 
   // 计算
   const inputDisabled = !!disabled || isSubmitting
