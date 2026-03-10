@@ -226,7 +226,10 @@ export const ChatArea = memo(
         visibleMsgIdsRef.current.clear()
         prePrependRef.current = null
         setContainerReady(!sessionId) // 无 session（home）直接可见
-      }, [sessionId])
+        // 同步通知父组件 isAtBottom 已重置为 true，
+        // 否则移动端切换 session 后输入框会残留上一个 session 的收起状态
+        onAtBottomChange?.(true)
+      }, [sessionId, onAtBottomChange])
 
       // 加载中清除浏览器残留的 scrollTop
       useEffect(() => {
