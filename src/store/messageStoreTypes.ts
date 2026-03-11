@@ -29,8 +29,6 @@ export interface SessionState {
   isStreaming: boolean
   /** 加载状态 */
   loadState: 'idle' | 'loading' | 'loaded' | 'error'
-  /** 向前加载的消息数（用于虚拟滚动定位） */
-  prependedCount: number
   /** 是否还有更多历史消息 */
   hasMoreHistory: boolean
   /** session 目录 */
@@ -51,7 +49,6 @@ export interface MessageStoreSnapshot {
   messages: Message[]
   isStreaming: boolean
   revertState: RevertState | null
-  prependedCount: number
   hasMoreHistory: boolean
   sessionDirectory: string
   shareUrl: string | undefined

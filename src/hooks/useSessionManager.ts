@@ -52,22 +52,10 @@ function mergeWithLocalStreamingMessages(
   })
 }
 
-function serializeApiMessageIds(messages: ApiMessageWithParts[]): string {
-  return JSON.stringify(messages.map(m => m.info.id))
-}
-
-function getStateMessageIds(state: SessionState): string[] {
-  return state.messages.map(m => m.info.id)
-}
-
-function serializeStateMessageIds(state: SessionState): string {
-  return JSON.stringify(getStateMessageIds(state))
-}
-
 export function useSessionManager({ sessionId, directory, onLoadComplete, onError }: UseSessionManagerOptions) {
   const loadSequenceRef = useRef<Map<string, number>>(new Map())
-  const historyLimitRef = useRef<Map<string, number>>(new Map())
-  const historyJsonRef = useRef<Map<string, string>>(new Map())
+  /** 每个 session 当前已请求的消息 limit（cursor），loadMore 时递增 */
+  const cursorRef = useRef<Map<string, number>>(new Map())
   const loadSessionRef = useRef<(sid: string, options?: { force?: boolean }) => Promise<void>>(async () => {})
 
   // 使用 ref 保存 directory，避免依赖变化
@@ -113,8 +101,7 @@ export function useSessionManager({ sessionId, directory, onLoadComplete, onErro
             if (isStale()) return
 
             if (messagesResult.ok) {
-              historyLimitRef.current.set(sid, Math.max(INITIAL_MESSAGE_LIMIT, messagesResult.messages.length))
-              historyJsonRef.current.set(sid, serializeApiMessageIds(messagesResult.messages))
+              cursorRef.current.set(sid, Math.max(INITIAL_MESSAGE_LIMIT, messagesResult.messages.length))
             }
 
             messageStore.updateSessionMetadata(sid, {
@@ -163,7 +150,7 @@ export function useSessionManager({ sessionId, directory, onLoadComplete, onErro
             shareUrl: sessionInfo?.share?.url,
           })
           onLoadComplete?.()
-          historyLimitRef.current.set(sid, Math.max(INITIAL_MESSAGE_LIMIT, apiMessages.length))
+          cursorRef.current.set(sid, Math.max(INITIAL_MESSAGE_LIMIT, apiMessages.length))
           return
         }
 
@@ -177,8 +164,7 @@ export function useSessionManager({ sessionId, directory, onLoadComplete, onErro
           shareUrl: sessionInfo?.share?.url,
         })
 
-        historyLimitRef.current.set(sid, Math.max(INITIAL_MESSAGE_LIMIT, apiMessages.length))
-        historyJsonRef.current.set(sid, serializeApiMessageIds(apiMessages))
+        cursorRef.current.set(sid, Math.max(INITIAL_MESSAGE_LIMIT, apiMessages.length))
 
         // force 模式（如 SSE 重连）只静默刷新数据，不触发滚动
         if (!force) {
@@ -210,85 +196,34 @@ export function useSessionManager({ sessionId, directory, onLoadComplete, onErro
     if (!state) return
 
     if (state.messages.length >= MAX_HISTORY_MESSAGES) {
-      console.warn(
-        `[SessionManager] loadMore:blocked-by-cap session=${sessionId} localCount=${state.messages.length} cap=${MAX_HISTORY_MESSAGES}`,
-      )
       messageStore.prependMessages(sessionId, [], false)
       return
     }
 
     const dir = state.directory || directoryRef.current
+    const currentCursor = cursorRef.current.get(sessionId) ?? Math.max(INITIAL_MESSAGE_LIMIT, state.messages.length)
+    const targetCursor = Math.min(currentCursor + HISTORY_LOAD_BATCH_SIZE, MAX_HISTORY_MESSAGES)
+
+    if (targetCursor <= currentCursor) {
+      messageStore.prependMessages(sessionId, [], false)
+      return
+    }
 
     try {
-      let currentLimit =
-        historyLimitRef.current.get(sessionId) ?? Math.max(INITIAL_MESSAGE_LIMIT, state.messages.length)
-      let currentJson = historyJsonRef.current.get(sessionId) ?? serializeStateMessageIds(state)
+      const apiMessages = await getSessionMessages(sessionId, targetCursor, dir)
+      cursorRef.current.set(sessionId, targetCursor)
 
-      logger.log(
-        `[SessionManager] loadMore:start session=${sessionId} limit=${currentLimit} localCount=${state.messages.length} localHasMore=${state.hasMoreHistory} first=${state.messages[0]?.info.id ?? 'none'} last=${state.messages[state.messages.length - 1]?.info.id ?? 'none'}`,
-      )
+      const latestState = messageStore.getSessionState(sessionId)
+      if (!latestState) return
 
-      while (true) {
-        const targetLimit = Math.min(currentLimit + HISTORY_LOAD_BATCH_SIZE, MAX_HISTORY_MESSAGES)
+      // 去重 + 按时间排序
+      const existingIds = new Set(latestState.messages.map(m => m.info.id))
+      const prependCandidates = apiMessages
+        .filter(m => !existingIds.has(m.info.id))
+        .sort((a, b) => (a.info.time?.created ?? 0) - (b.info.time?.created ?? 0))
 
-        if (targetLimit <= currentLimit) {
-          logger.log(
-            `[SessionManager] loadMore:no-more session=${sessionId} reason=limit-cap currentLimit=${currentLimit}`,
-          )
-          messageStore.prependMessages(sessionId, [], false)
-          return
-        }
-
-        const apiMessages = await getSessionMessages(sessionId, targetLimit, dir)
-        const nextJson = serializeApiMessageIds(apiMessages)
-        historyLimitRef.current.set(sessionId, targetLimit)
-        historyJsonRef.current.set(sessionId, nextJson)
-
-        logger.log(
-          `[SessionManager] loadMore:fetched session=${sessionId} targetLimit=${targetLimit} apiCount=${apiMessages.length} jsonChanged=${currentJson !== nextJson} first=${apiMessages[0]?.info.id ?? 'none'} last=${apiMessages[apiMessages.length - 1]?.info.id ?? 'none'}`,
-        )
-
-        // 核心规则：新拉取 JSON 与本地缓存 JSON 相同 => 没有更多历史
-        if (currentJson === nextJson) {
-          logger.log(
-            `[SessionManager] loadMore:no-more session=${sessionId} reason=json-unchanged apiCount=${apiMessages.length}`,
-          )
-          messageStore.prependMessages(sessionId, [], false)
-          return
-        }
-
-        const latestState = messageStore.getSessionState(sessionId)
-        if (!latestState) return
-
-        const existingIds = new Set(getStateMessageIds(latestState))
-        const oldestCreated = latestState.messages[0]?.info.time.created ?? Number.POSITIVE_INFINITY
-        const prependCandidates = apiMessages
-          .filter(m => !existingIds.has(m.info.id))
-          .filter(m => (m.info.time?.created ?? Number.POSITIVE_INFINITY) <= oldestCreated)
-
-        const hasMore = apiMessages.length >= targetLimit && targetLimit < MAX_HISTORY_MESSAGES
-
-        if (prependCandidates.length > 0) {
-          logger.log(
-            `[SessionManager] loadMore:prepend session=${sessionId} prependCount=${prependCandidates.length} hasMore=${hasMore} first=${prependCandidates[0]?.info.id ?? 'none'} last=${prependCandidates[prependCandidates.length - 1]?.info.id ?? 'none'}`,
-          )
-          messageStore.prependMessages(sessionId, prependCandidates, hasMore)
-          return
-        }
-
-        // JSON 有变化但暂无可前插历史：继续扩大 limit 强拉
-        logger.log(
-          `[SessionManager] loadMore:changed-no-prepend-continue session=${sessionId} targetLimit=${targetLimit} apiCount=${apiMessages.length} hasMore=${hasMore}`,
-        )
-
-        if (!hasMore) {
-          messageStore.prependMessages(sessionId, [], false)
-          return
-        }
-
-        currentLimit = targetLimit
-        currentJson = nextJson
-      }
+      const hasMore = apiMessages.length >= targetCursor && targetCursor < MAX_HISTORY_MESSAGES
+      messageStore.prependMessages(sessionId, prependCandidates, hasMore)
     } catch (error) {
       sessionErrorHandler('load more history', error)
     }
@@ -427,19 +362,15 @@ export function useSessionManager({ sessionId, directory, onLoadComplete, onErro
       const canUseCached = !!cached && cached.loadState === 'loaded' && !cached.isStale && cached.messages.length > 0
 
       if (canUseCached) {
-        const cachedLimit = Math.max(INITIAL_MESSAGE_LIMIT, cached.messages.length)
-        const prevLimit = historyLimitRef.current.get(sessionId) ?? 0
-        if (cachedLimit > prevLimit) {
-          historyLimitRef.current.set(sessionId, cachedLimit)
-        }
-        if (!historyJsonRef.current.has(sessionId)) {
-          historyJsonRef.current.set(sessionId, serializeStateMessageIds(cached))
+        const cachedCursor = Math.max(INITIAL_MESSAGE_LIMIT, cached.messages.length)
+        const prevCursor = cursorRef.current.get(sessionId) ?? 0
+        if (cachedCursor > prevCursor) {
+          cursorRef.current.set(sessionId, cachedCursor)
         }
 
         logger.log('[SessionManager] switch:use-cached', {
           sessionId,
           cachedCount: cached.messages.length,
-          cachedLimit,
         })
         return
       }

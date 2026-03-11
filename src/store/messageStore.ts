@@ -100,7 +100,7 @@ class MessageStore {
   }
 
   getPrependedCount(): number {
-    return this.getCurrentSessionState()?.prependedCount ?? 0
+    return 0
   }
 
   getHasMoreHistory(): boolean {
@@ -144,7 +144,6 @@ class MessageStore {
         revertState: null,
         isStreaming: false,
         loadState: 'idle',
-        prependedCount: 0,
         hasMoreHistory: false,
         directory: '',
         shareUrl: undefined,
@@ -183,7 +182,6 @@ class MessageStore {
     if (excess <= 0) return
 
     state.messages = state.messages.slice(excess)
-    state.prependedCount = Math.max(0, state.prependedCount - excess)
     state.hasMoreHistory = false
 
     if (state.revertState) {
@@ -253,7 +251,6 @@ class MessageStore {
 
     state.messages = apiMessages.map(this.convertApiMessage)
     state.loadState = 'loaded'
-    state.prependedCount = 0
     state.hasMoreHistory = options?.hasMoreHistory ?? false
     state.directory = options?.directory ?? ''
     state.shareUrl = options?.shareUrl
@@ -317,7 +314,6 @@ class MessageStore {
 
     if (unique.length > 0) {
       state.messages = [...unique, ...state.messages]
-      state.prependedCount += unique.length
     }
     state.hasMoreHistory = hasMore
 

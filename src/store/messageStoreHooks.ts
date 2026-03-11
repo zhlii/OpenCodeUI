@@ -21,7 +21,6 @@ function createSnapshot(): MessageStoreSnapshot {
     messages: messageStore.getVisibleMessages(),
     isStreaming: messageStore.getIsStreaming(),
     revertState: messageStore.getRevertState(),
-    prependedCount: messageStore.getPrependedCount(),
     hasMoreHistory: messageStore.getHasMoreHistory(),
     sessionDirectory: messageStore.getSessionDirectory(),
     shareUrl: messageStore.getShareUrl(),

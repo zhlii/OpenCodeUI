@@ -151,7 +151,6 @@ function App() {
     // State
     messages,
     isStreaming,
-    prependedCount,
     canUndo,
     canRedo,
     redoSteps,
@@ -616,7 +615,6 @@ function App() {
                 messages={messages}
                 sessionId={routeSessionId}
                 isStreaming={isStreaming}
-                prependedCount={prependedCount}
                 loadState={loadState}
                 hasMoreHistory={hasMoreHistory}
                 onLoadMore={loadMoreHistory}

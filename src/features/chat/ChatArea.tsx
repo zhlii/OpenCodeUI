@@ -21,8 +21,6 @@ interface ChatAreaProps {
   messages: Message[]
   sessionId?: string | null
   isStreaming?: boolean
-  /** @deprecated 不再使用 */
-  prependedCount?: number
   loadState?: 'idle' | 'loading' | 'loaded' | 'error'
   hasMoreHistory?: boolean
   onLoadMore?: () => void | Promise<void>

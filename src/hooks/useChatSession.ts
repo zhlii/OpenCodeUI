@@ -95,7 +95,6 @@ export function useChatSession({ chatAreaRef, currentModel, refetchModels }: Use
   const isSessionSynced = storeState.sessionId === routeSessionId
   const messages = storeState.messages
   const isStreaming = storeState.isStreaming
-  const prependedCount = storeState.prependedCount
   const sessionDirectory = storeState.sessionDirectory
   const canUndo = isSessionSynced ? storeState.canUndo : false
   const canRedo = isSessionSynced ? storeState.canRedo : false
@@ -615,7 +614,6 @@ export function useChatSession({ chatAreaRef, currentModel, refetchModels }: Use
     // State
     messages,
     isStreaming,
-    prependedCount,
     sessionDirectory,
     canUndo,
     canRedo,
