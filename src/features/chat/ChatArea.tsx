@@ -121,7 +121,10 @@ export const ChatArea = memo(
         const el = scrollRef.current
         if (!el) return
         const onScroll = () => {
-          const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight <= atBottomThreshold
+          // 内容没有溢出时（scrollHeight <= clientHeight），始终认为在底部
+          // 类似滚动条逻辑：没有溢出就没有滚动条，也不需要 scrollToBottom 按钮
+          const hasOverflow = el.scrollHeight > el.clientHeight + 1
+          const atBottom = !hasOverflow || el.scrollHeight - el.scrollTop - el.clientHeight <= atBottomThreshold
           const prev = isAtBottomRef.current
           isAtBottomRef.current = atBottom
           if (prev !== atBottom) onAtBottomChange?.(atBottom)

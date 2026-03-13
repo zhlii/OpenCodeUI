@@ -883,20 +883,26 @@ function InputBoxComponent({
         <div
           ref={contentWrapRef}
           onPointerDown={handleContainerPointerDown}
-          className={`flex flex-col gap-2 ${isCollapsed ? 'justify-end' : ''}`}
+          className={`relative flex flex-col gap-2 ${isCollapsed ? 'justify-end' : ''}`}
           style={isCollapsed && expandedHeight > 0 ? { minHeight: expandedHeight } : undefined}
         >
-          <FloatingActions
-            showScrollToBottom={showScrollToBottom}
-            isCollapsed={isCollapsed}
-            canRedo={canRedo}
-            revertSteps={revertSteps}
-            onRedo={onRedo}
-            onRedoAll={onRedoAll}
-            onScrollToBottom={onScrollToBottom}
-            collapsedPermission={collapsedPermission}
-            collapsedQuestion={collapsedQuestion}
-          />
+          {/* FloatingActions — absolute 定位在内容区上方，不占文档流，
+              避免显隐变化影响 InputBox 高度导致滚动位置抖动 */}
+          <div className="absolute bottom-full left-0 right-0 flex justify-center pb-2 pointer-events-none">
+            <div className="pointer-events-auto">
+              <FloatingActions
+                showScrollToBottom={showScrollToBottom}
+                isCollapsed={isCollapsed}
+                canRedo={canRedo}
+                revertSteps={revertSteps}
+                onRedo={onRedo}
+                onRedoAll={onRedoAll}
+                onScrollToBottom={onScrollToBottom}
+                collapsedPermission={collapsedPermission}
+                collapsedQuestion={collapsedQuestion}
+              />
+            </div>
+          </div>
 
           {/* Collapsed Capsule - 移动端收起状态 */}
           {isCollapsed ? (
