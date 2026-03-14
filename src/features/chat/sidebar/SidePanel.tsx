@@ -22,6 +22,7 @@ import {
   type ConnectionInfo,
 } from '../../../api'
 import { uiErrorHandler } from '../../../utils'
+import { APP_NAME } from '../../../constants'
 
 // 侧边栏设计模式：
 // - 按钮结构统一，不因 expanded/collapsed 改变 DOM
@@ -297,8 +298,8 @@ export function SidePanel({
               {attentionCount > 0 && (
                 <span
                   className={`inline-flex items-center justify-center min-w-[16px] h-4 px-1 text-[10px] font-bold rounded-full ${attentionCount > busyCount
-                      ? 'bg-accent-main-100/15 text-accent-main-100'
-                      : 'bg-success-100/15 text-success-100'
+                    ? 'bg-accent-main-100/15 text-accent-main-100'
+                    : 'bg-success-100/15 text-success-100'
                     }`}
                 >
                   {attentionCount}
