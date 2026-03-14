@@ -2,6 +2,7 @@ import { useCallback, useMemo, useState, useEffect, useRef } from 'react'
 import { SessionList } from '../../sessions'
 import { ShareDialog } from '../ShareDialog'
 import { ContextDetailsDialog } from './ContextDetailsDialog'
+import { APP_NAME } from '../../../constants'
 import {
   SidebarIcon,
   PlusIcon,
@@ -214,7 +215,7 @@ export function SidePanel({
           }}
         >
           <a href="/" className="flex items-center whitespace-nowrap">
-            <span className="text-base font-semibold text-text-100 tracking-tight">OpenCode</span>
+            <span className="text-base font-semibold text-text-100 tracking-tight">{APP_NAME}</span>
           </a>
         </div>
 

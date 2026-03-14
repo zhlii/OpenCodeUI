@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { PanelRightIcon, PanelBottomIcon, ChevronDownIcon, SidebarIcon } from '../../components/Icons'
 import { IconButton } from '../../components/ui'
+import { APP_NAME } from '../../constants'
 import { ModelSelector, type ModelSelectorHandle } from './ModelSelector'
 import { ShareDialog } from './ShareDialog'
 import { useMessageStore } from '../../store'
@@ -41,15 +42,15 @@ export function Header({
   const currentSession = useMemo(() => sessions.find(s => s.id === sessionId), [sessions, sessionId])
   const sessionTitle = currentSession?.title || 'New Chat'
 
-  // 同步 document.title - 有 session 标题时显示 "标题 - OpenCode"，否则只显示 "OpenCode"
+  // 同步 document.title - 有 session 标题时显示 "标题 - APP_NAME"，否则只显示 APP_NAME
   useEffect(() => {
     if (currentSession?.title) {
-      document.title = `${currentSession.title} - OpenCode`
+      document.title = `${currentSession.title} - ${APP_NAME}`
     } else {
-      document.title = 'OpenCode'
+      document.title = APP_NAME
     }
     return () => {
-      document.title = 'OpenCode'
+      document.title = APP_NAME
     }
   }, [currentSession?.title])
 

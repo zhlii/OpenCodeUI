@@ -7,6 +7,7 @@ import { useState } from 'react'
 import { Dialog } from './ui/Dialog'
 import { Button } from './ui/Button'
 import { PlugIcon, SpinnerIcon } from './Icons'
+import { APP_NAME } from '../constants'
 
 interface CloseServiceDialogProps {
   isOpen: boolean
@@ -31,7 +32,7 @@ export function CloseServiceDialog({ isOpen, onConfirm, onCancel }: CloseService
         </div>
 
         {/* Title */}
-        <h3 className="text-[15px] font-semibold text-text-100 mb-2">Close OpenCode</h3>
+        <h3 className="text-[15px] font-semibold text-text-100 mb-2">Close {APP_NAME}</h3>
 
         {/* Description */}
         <p className="text-[13px] text-text-300 leading-relaxed mb-6 max-w-[320px]">

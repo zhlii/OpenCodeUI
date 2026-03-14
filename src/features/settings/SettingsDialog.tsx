@@ -39,6 +39,7 @@ import { KeybindingsSection } from './KeybindingsSection'
 import type { ThemeMode } from '../../hooks'
 import type { PathMode } from '../../utils/directoryUtils'
 import type { ServerConfig, ServerHealth } from '../../store/serverStore'
+import { APP_NAME } from '../../constants'
 
 const APP_VERSION_LABEL = `OpenCodeUI v${__APP_VERSION__}`
 
@@ -634,7 +635,7 @@ function GeneralSettings({ mode }: { mode: 'chat' | 'notifications' | 'service' 
   }
 
   const handleTestNotification = () => {
-    sendNotification('OpenCode', 'This is a test notification')
+    sendNotification(APP_NAME, 'This is a test notification')
   }
 
   const handleReasoningDisplayModeChange = (mode: ReasoningDisplayMode) => {
