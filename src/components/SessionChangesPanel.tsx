@@ -11,6 +11,7 @@ import { DiffViewer, type ViewMode } from './DiffViewer'
 import { getSessionDiff } from '../api/session'
 import type { FileDiff } from '../api/types'
 import { detectLanguage } from '../utils/languageUtils'
+import { sessionErrorHandler } from '../utils'
 
 // 常量
 const MIN_LIST_HEIGHT = 80
@@ -77,7 +78,7 @@ export const SessionChangesPanel = memo(function SessionChangesPanel({
         })
         .catch(err => {
           if (cancelled || requestId !== requestIdRef.current) return
-          console.error('Failed to load session diff:', err)
+          sessionErrorHandler('load session diff', err)
           setError('Failed to load changes')
         })
         .finally(() => {
@@ -108,7 +109,7 @@ export const SessionChangesPanel = memo(function SessionChangesPanel({
           })
         })
         .catch(err => {
-          console.error('Failed to load session diff:', err)
+          sessionErrorHandler('load session diff', err)
           setError('Failed to load changes')
         })
         .finally(() => setLoading(false))

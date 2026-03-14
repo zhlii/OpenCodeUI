@@ -4,6 +4,7 @@
 // ============================================
 
 import { useCallback, useRef, useEffect } from 'react'
+import { uiErrorHandler } from '../utils'
 
 interface CompressResult {
   dataUrl: string
@@ -59,7 +60,7 @@ export function useImageCompressor() {
     }
 
     workerRef.current.onerror = err => {
-      console.error('[ImageCompressor] Worker error:', err)
+      uiErrorHandler('image compressor worker', err)
     }
 
     return () => {

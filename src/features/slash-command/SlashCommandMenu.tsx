@@ -6,6 +6,7 @@
 import { useState, useEffect, useLayoutEffect, useRef, useImperativeHandle, forwardRef, useMemo } from 'react'
 import { getCommands, type Command } from '../../api/command'
 import { TerminalIcon } from '../../components/Icons'
+import { apiErrorHandler } from '../../utils'
 
 // ============================================
 // Types
@@ -112,7 +113,7 @@ export const SlashCommandMenu = forwardRef<SlashCommandMenuHandle, SlashCommandM
         })
         .catch(err => {
           if (requestId !== requestIdRef.current) return
-          console.error('Failed to load commands:', err)
+          apiErrorHandler('load commands', err)
           setCommands([])
         })
         .finally(() => {

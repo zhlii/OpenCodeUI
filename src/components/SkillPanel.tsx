@@ -16,6 +16,7 @@ import {
 import { getSkills } from '../api/skill'
 import type { Skill } from '../types/api/skill'
 import { useDirectory } from '../hooks'
+import { apiErrorHandler } from '../utils'
 
 // ============================================
 // SkillPanel Component
@@ -39,7 +40,7 @@ export const SkillPanel = memo(function SkillPanel({ isResizing: _isResizing }: 
       const data = await getSkills(currentDirectory)
       setSkills(data)
     } catch (err) {
-      console.error('[SkillPanel] Failed to load skills:', err)
+      apiErrorHandler('load skills', err)
       setError('Failed to load skills')
     } finally {
       setLoading(false)

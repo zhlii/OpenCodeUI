@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ApiMessage, ApiMessageWithParts, ApiPart } from '../api/types'
-import { messageCacheStore } from './messageCacheStore'
 import { messageStore } from './messageStore'
 
 function createAssistantMessage(id: string): ApiMessage {
@@ -52,16 +51,15 @@ function createMessageWithParts(id: string, text: string): ApiMessageWithParts {
   }
 }
 
-describe('messageStore SSE ordering safeguards', () => {
+describe('messageStore', () => {
   beforeEach(() => {
     vi.restoreAllMocks()
-    vi.spyOn(messageCacheStore, 'setMessageParts').mockResolvedValue()
     messageStore.clearAll()
   })
 
-  it('replays a queued part update after the message arrives', () => {
-    messageStore.handlePartUpdated(createTextPart('part-1', 'message-1', 'hello'))
+  it('applies a part update when the message already exists', () => {
     messageStore.handleMessageUpdated(createAssistantMessage('message-1'))
+    messageStore.handlePartUpdated(createTextPart('part-1', 'message-1', 'hello'))
 
     const state = messageStore.getSessionState('session-1')
     expect(state?.messages).toHaveLength(1)
@@ -69,19 +67,13 @@ describe('messageStore SSE ordering safeguards', () => {
     expect(state?.messages[0].parts[0]).toMatchObject({ id: 'part-1', type: 'text', text: 'hello' })
   })
 
-  it('treats a later full part snapshot as authoritative over older queued deltas', () => {
-    messageStore.handlePartDelta({
-      sessionID: 'session-1',
-      messageID: 'message-1',
-      partID: 'part-1',
-      field: 'text',
-      delta: ' world',
-    })
-    messageStore.handlePartUpdated(createTextPart('part-1', 'message-1', 'hello world'))
-    messageStore.handleMessageUpdated(createAssistantMessage('message-1'))
+  it('silently drops a part update when the message does not exist yet', () => {
+    // Part arrives before message — should be silently dropped (no pending queue)
+    messageStore.handlePartUpdated(createTextPart('part-1', 'message-1', 'hello'))
 
     const state = messageStore.getSessionState('session-1')
-    expect(state?.messages[0].parts[0]).toMatchObject({ text: 'hello world' })
+    // session-1 doesn't exist because handlePartUpdated doesn't ensureSession
+    expect(state).toBeUndefined()
   })
 
   it('marks cached sessions stale after reconnect and clears the flag after a fresh load', () => {
@@ -96,18 +88,7 @@ describe('messageStore SSE ordering safeguards', () => {
     expect(messageStore.isSessionStale('session-1')).toBe(false)
   })
 
-  it('removes obsolete message cache entries when a fresh load replaces old messages', () => {
-    const deleteBatchSpy = vi.spyOn(messageCacheStore, 'deleteMessagePartsBatch').mockResolvedValue()
-
-    messageStore.setMessages('session-1', [createMessageWithParts('message-1', 'hello')])
-    messageStore.setMessages('session-1', [createMessageWithParts('message-2', 'world')])
-
-    expect(deleteBatchSpy).toHaveBeenCalledWith('session-1', ['message-1'])
-  })
-
-  it('cleans removed branch cache entries when truncating after revert', () => {
-    const deleteBatchSpy = vi.spyOn(messageCacheStore, 'deleteMessagePartsBatch').mockResolvedValue()
-
+  it('truncates messages after revert point', () => {
     messageStore.setMessages('session-1', [
       createMessageWithParts('message-1', 'one'),
       createMessageWithParts('message-2', 'two'),
@@ -120,16 +101,14 @@ describe('messageStore SSE ordering safeguards', () => {
 
     messageStore.truncateAfterRevert('session-1')
 
-    expect(deleteBatchSpy).toHaveBeenCalledWith('session-1', ['message-2', 'message-3'])
+    const state = messageStore.getSessionState('session-1')
+    expect(state?.messages).toHaveLength(1)
+    expect(state?.messages[0].info.id).toBe('message-1')
+    expect(state?.revertState).toBeNull()
   })
 
-  it('deletes persisted cache when the last part of a message is removed', () => {
-    const deleteBatchSpy = vi.spyOn(messageCacheStore, 'deleteMessagePartsBatch').mockResolvedValue()
-
+  it('removes a part from a message', () => {
     messageStore.setMessages('session-1', [createMessageWithParts('message-1', 'hello')])
-    ;(
-      messageStore as unknown as { markMessagePersisted: (sessionId: string, messageId: string) => void }
-    ).markMessagePersisted('session-1', 'message-1')
 
     messageStore.handlePartRemoved({
       sessionID: 'session-1',
@@ -137,6 +116,22 @@ describe('messageStore SSE ordering safeguards', () => {
       id: 'part-message-1',
     })
 
-    expect(deleteBatchSpy).toHaveBeenCalledWith('session-1', ['message-1'])
+    const state = messageStore.getSessionState('session-1')
+    expect(state?.messages[0].parts).toHaveLength(0)
+  })
+
+  it('deduplicates messages in prependMessages', () => {
+    messageStore.setMessages('session-1', [createMessageWithParts('message-2', 'two')])
+
+    messageStore.prependMessages(
+      'session-1',
+      [createMessageWithParts('message-1', 'one'), createMessageWithParts('message-2', 'duplicate')],
+      true,
+    )
+
+    const state = messageStore.getSessionState('session-1')
+    expect(state?.messages).toHaveLength(2)
+    expect(state?.messages[0].info.id).toBe('message-1')
+    expect(state?.messages[1].info.id).toBe('message-2')
   })
 })

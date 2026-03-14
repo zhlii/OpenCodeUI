@@ -28,6 +28,8 @@ import {
 } from '../api/mcp'
 import type { MCPStatus, McpServerConfig } from '../types/api/mcp'
 import { useDirectory } from '../hooks'
+import { logger } from '../utils/logger'
+import { apiErrorHandler } from '../utils'
 
 // ============================================
 // Types
@@ -59,7 +61,7 @@ export const McpPanel = memo(function McpPanel({ isResizing: _isResizing }: McpP
     try {
       setError(null)
       const statusResponse = await getMcpStatus(currentDirectory)
-      console.log('[McpPanel] Status:', statusResponse)
+      logger.log('[McpPanel] Status:', statusResponse)
 
       // 构建 server entries
       const entries: ServerEntry[] = Object.entries(statusResponse).map(([name, status]) => ({
@@ -71,7 +73,7 @@ export const McpPanel = memo(function McpPanel({ isResizing: _isResizing }: McpP
       entries.sort((a, b) => a.name.localeCompare(b.name))
       setServers(entries)
     } catch (err) {
-      console.error('[McpPanel] Failed to load MCP status:', err)
+      apiErrorHandler('load MCP status', err)
       setError('Failed to load MCP servers')
     } finally {
       setLoading(false)
@@ -99,7 +101,7 @@ export const McpPanel = memo(function McpPanel({ isResizing: _isResizing }: McpP
         await new Promise(r => setTimeout(r, 500))
         await loadStatus()
       } catch (err) {
-        console.error('[McpPanel] Failed to connect:', err)
+        apiErrorHandler('connect MCP server', err)
       } finally {
         setActionLoading(null)
       }
@@ -116,7 +118,7 @@ export const McpPanel = memo(function McpPanel({ isResizing: _isResizing }: McpP
         await new Promise(r => setTimeout(r, 500))
         await loadStatus()
       } catch (err) {
-        console.error('[McpPanel] Failed to disconnect:', err)
+        apiErrorHandler('disconnect MCP server', err)
       } finally {
         setActionLoading(null)
       }
@@ -142,7 +144,7 @@ export const McpPanel = memo(function McpPanel({ isResizing: _isResizing }: McpP
           await new Promise(r => setTimeout(r, 3000))
           await loadStatus()
         } catch (err2) {
-          console.error('[McpPanel] Failed to start auth:', err2)
+          apiErrorHandler('start MCP auth', err2)
         }
       } finally {
         setActionLoading(null)
@@ -161,7 +163,7 @@ export const McpPanel = memo(function McpPanel({ isResizing: _isResizing }: McpP
         await new Promise(r => setTimeout(r, 500))
         await loadStatus()
       } catch (err) {
-        console.error('[McpPanel] Failed to add server:', err)
+        apiErrorHandler('add MCP server', err)
         throw err
       } finally {
         setActionLoading(null)

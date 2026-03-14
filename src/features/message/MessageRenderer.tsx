@@ -1,6 +1,7 @@
 import { memo, useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react'
+import { animate } from 'motion/mini'
 import { ChevronDownIcon, ChevronRightIcon, UndoIcon } from '../../components/Icons'
-import { CopyButton } from '../../components/ui'
+import { CopyButton, SmoothHeight } from '../../components/ui'
 import { useDelayedRender } from '../../hooks'
 import { useTheme } from '../../hooks/useTheme'
 import {
@@ -58,16 +59,33 @@ export const MessageRenderer = memo(function MessageRenderer({
 })
 
 // ============================================
+// 入场生长动画 hook — 新消息作为对话流的延续，从 height 0 平滑展开
+// ============================================
+
+function useEntryGrowAnimation(created: number) {
+  const ref = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const el = ref.current
+    if (!el || Date.now() - created > 3000) return
+    const targetHeight = el.scrollHeight
+    el.style.height = '0px'
+    el.style.overflow = 'hidden'
+    animate(el, { height: `${targetHeight}px` }, { duration: 0.2, ease: 'easeOut' }).then(() => {
+      el.style.height = ''
+      el.style.overflow = ''
+    })
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  return ref
+}
+
+// ============================================
 // Collapsible User Text
 // ============================================
 
 /** 默认预览 8 行 */
 const COLLAPSE_PREVIEW_LINES = 8
 
-/**
- * react-virtuoso 滚动时会卸载/重挂载 item，组件内 state 不足以保留折叠状态。
- * 这里缓存两件事：这条消息是否真的溢出，以及用户是否手动展开过。
- */
+// 折叠状态缓存：消息是否溢出、用户是否手动展开过
 const overflowStateCache = new Map<string, boolean>()
 const expandedMessages = new Set<string>()
 
@@ -166,6 +184,8 @@ const UserMessageView = memo(function UserMessageView({ message, onUndo, canUndo
   const shouldRenderSystemContext = useDelayedRender(showSystemContext)
   const { collapseUserMessages } = useTheme()
 
+  const wrapperRef = useEntryGrowAnimation(info.time.created)
+
   // 分离不同类型的 parts
   const textParts = parts.filter((p): p is TextPart => p.type === 'text' && !p.synthetic)
   const syntheticParts = parts.filter((p): p is TextPart => p.type === 'text' && !!p.synthetic)
@@ -176,7 +196,7 @@ const UserMessageView = memo(function UserMessageView({ message, onUndo, canUndo
   const messageText = textParts.map(p => p.text).join('')
 
   return (
-    <div className="flex flex-col items-end group">
+    <div ref={wrapperRef} className="flex flex-col items-end group">
       <div className="flex flex-col gap-1 items-end w-full">
         {/* 消息文本 */}
         {messageText && (
@@ -263,6 +283,8 @@ const AssistantMessageView = memo(function AssistantMessageView({
 }) {
   const { parts, isStreaming, info } = message
 
+  const wrapperRef = useEntryGrowAnimation(info.time.created)
+
   useEffect(() => {
     if (parts.length === 0 && onEnsureParts) {
       onEnsureParts(message.info.id)
@@ -313,77 +335,72 @@ const AssistantMessageView = memo(function AssistantMessageView({
         </div>
       )
     }
-    // 使用骨架屏占位，预留合理高度减少 CLS
-    return (
-      <div className="flex flex-col gap-2 w-full min-h-[80px]">
-        <div className="flex items-center gap-2 text-xs text-text-500">
-          <span className="w-2 h-2 rounded-full bg-text-500/50 animate-pulse" />
-          <span className="text-text-400">Loading...</span>
-        </div>
-        {/* 骨架屏模拟文本行 */}
-        <div className="space-y-2">
-          <div className="h-4 bg-bg-200/50 rounded w-3/4 animate-pulse" />
-          <div className="h-4 bg-bg-200/50 rounded w-1/2 animate-pulse" />
-        </div>
-      </div>
-    )
+    // parts 尚未 hydrate — 保留最小占位减少 CLS，不显示骨架/loading 文字
+    // onEnsureParts 已在上方 useEffect 中触发 hydrate，parts 到位后自动 re-render
+    return <div className="w-full min-h-[40px]" />
   }
 
   return (
-    <div className="flex flex-col gap-2 w-full group">
-      {renderItems.map((item: RenderItem, idx: number) => {
-        // 耗时只在最后一个含 stepFinish 的 item 上显示
-        const isLastStepFinish =
-          idx ===
-          renderItems.findLastIndex(it => (it.type === 'tool-group' ? !!it.stepFinish : it.part.type === 'step-finish'))
+    <div ref={wrapperRef} className="flex flex-col gap-2 w-full group">
+      {/* 消息级 SmoothHeight：streaming 时所有高度变化统一平滑过渡 */}
+      <SmoothHeight isActive={!!isStreaming}>
+        <div className="flex flex-col gap-2">
+          {renderItems.map((item: RenderItem, idx: number) => {
+            // 耗时只在最后一个含 stepFinish 的 item 上显示
+            const isLastStepFinish =
+              idx ===
+              renderItems.findLastIndex(it =>
+                it.type === 'tool-group' ? !!it.stepFinish : it.part.type === 'step-finish',
+              )
 
-        if (item.type === 'tool-group') {
-          return (
-            <ToolGroup
-              key={item.parts[0].id}
-              parts={item.parts as ToolPart[]}
-              stepFinish={item.stepFinish}
-              duration={isLastStepFinish ? duration : undefined}
-              turnDuration={isLastStepFinish ? turnDuration : undefined}
-            />
-          )
-        }
+            if (item.type === 'tool-group') {
+              return (
+                <ToolGroup
+                  key={item.parts[0].id}
+                  parts={item.parts as ToolPart[]}
+                  stepFinish={item.stepFinish}
+                  duration={isLastStepFinish ? duration : undefined}
+                  turnDuration={isLastStepFinish ? turnDuration : undefined}
+                  isStreaming={isStreaming}
+                />
+              )
+            }
 
-        const part = item.part
-        switch (part.type) {
-          case 'text':
-            return <TextPartView key={part.id} part={part as TextPart} isStreaming={isStreaming} />
-          case 'reasoning': {
-            // 通过源 parts 数组判断思考是否已结束，而非依赖 renderItems 位置
-            // 这样即使空 text part 被 renderItems 过滤，也能正确检测到思考结束
-            const reasoningDone = endedReasoningIds.has(part.id)
-            return (
-              <ReasoningPartView
-                key={part.id}
-                part={part as ReasoningPart}
-                isStreaming={isStreaming && !reasoningDone}
-              />
-            )
-          }
-          case 'step-finish':
-            return (
-              <StepFinishPartView
-                key={part.id}
-                part={part as StepFinishPart}
-                duration={isLastStepFinish ? duration : undefined}
-                turnDuration={isLastStepFinish ? turnDuration : undefined}
-              />
-            )
-          case 'subtask':
-            return <SubtaskPartView key={part.id} part={part as SubtaskPart} />
-          case 'retry':
-            return <RetryPartView key={part.id} part={part as RetryPart} />
-          case 'compaction':
-            return <CompactionPartView key={part.id} part={part as CompactionPart} />
-          default:
-            return null
-        }
-      })}
+            const part = item.part
+            switch (part.type) {
+              case 'text':
+                return <TextPartView key={part.id} part={part as TextPart} isStreaming={isStreaming} />
+              case 'reasoning': {
+                const reasoningDone = endedReasoningIds.has(part.id)
+                return (
+                  <ReasoningPartView
+                    key={part.id}
+                    part={part as ReasoningPart}
+                    isStreaming={isStreaming && !reasoningDone}
+                  />
+                )
+              }
+              case 'step-finish':
+                return (
+                  <StepFinishPartView
+                    key={part.id}
+                    part={part as StepFinishPart}
+                    duration={isLastStepFinish ? duration : undefined}
+                    turnDuration={isLastStepFinish ? turnDuration : undefined}
+                  />
+                )
+              case 'subtask':
+                return <SubtaskPartView key={part.id} part={part as SubtaskPart} />
+              case 'retry':
+                return <RetryPartView key={part.id} part={part as RetryPart} />
+              case 'compaction':
+                return <CompactionPartView key={part.id} part={part as CompactionPart} />
+              default:
+                return null
+            }
+          })}
+        </div>
+      </SmoothHeight>
 
       {/* Message-level error */}
       {messageError && <MessageErrorView error={messageError} />}
@@ -407,9 +424,10 @@ interface ToolGroupProps {
   stepFinish?: StepFinishPart
   duration?: number
   turnDuration?: number
+  isStreaming?: boolean
 }
 
-const ToolGroup = memo(function ToolGroup({ parts, stepFinish, duration, turnDuration }: ToolGroupProps) {
+const ToolGroup = memo(function ToolGroup({ parts, stepFinish, duration, turnDuration, isStreaming }: ToolGroupProps) {
   const [expanded, setExpanded] = useState(true)
   const shouldRenderBody = useDelayedRender(expanded)
 
@@ -417,50 +435,51 @@ const ToolGroup = memo(function ToolGroup({ parts, stepFinish, duration, turnDur
   const totalCount = parts.length
   const isAllDone = doneCount === totalCount
 
-  // ── Single tool: render directly without steps header ──
-  // Uses compact layout to align icon with ReasoningPartView
-  if (totalCount === 1) {
-    return (
-      <div className="flex flex-col">
-        <ToolPartView part={parts[0]} isFirst={true} isLast={true} compact={true} />
-        {stepFinish && (
-          <div className="mt-2">
-            <StepFinishPartView part={stepFinish} duration={duration} turnDuration={turnDuration} />
-          </div>
-        )}
-      </div>
-    )
-  }
+  // compact: 单工具且非 streaming 时用紧凑布局（图标内联，无 timeline 连接线）
+  const isSingleCompact = totalCount === 1 && !isStreaming
+  // steps header: 仅多工具时显示
+  const showStepsHeader = totalCount > 1
 
-  // ── Multi-tool: collapsible steps group with timeline ──
+  // 统一容器结构 — ToolPartView 始终在同一 React 树位置，
+  // streaming→idle / 1→N 工具切换时不 remount，expanded 状态不丢失
   return (
     <div className="flex flex-col">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-1.5 py-1.5 text-text-400 text-sm hover:text-text-200 hover:bg-bg-200/30 rounded-md transition-colors"
-      >
-        <span className="inline-flex w-[14px] items-center justify-center shrink-0">
-          {expanded ? <ChevronDownIcon size={14} /> : <ChevronRightIcon size={14} />}
-        </span>
-        <span className="inline-flex items-baseline gap-2 whitespace-nowrap">
-          <span className="text-[13px] font-medium leading-tight">
-            {isAllDone ? `${totalCount} steps` : `${doneCount}/${totalCount} steps`}
+      {showStepsHeader && (
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="flex items-center gap-1.5 py-1.5 text-text-400 text-sm hover:text-text-200 hover:bg-bg-200/30 rounded-md transition-colors"
+        >
+          <span className="inline-flex w-[14px] items-center justify-center shrink-0">
+            {expanded ? <ChevronDownIcon size={14} /> : <ChevronRightIcon size={14} />}
           </span>
-          {!expanded && stepFinish && (
-            <span className="text-xs text-text-500 font-mono opacity-70">{formatTokens(stepFinish.tokens)}</span>
-          )}
-        </span>
-      </button>
+          <span className="inline-flex items-baseline gap-2 whitespace-nowrap">
+            <span className="text-[13px] font-medium leading-tight">
+              {isAllDone ? `${totalCount} steps` : `${doneCount}/${totalCount} steps`}
+            </span>
+            {!expanded && stepFinish && (
+              <span className="text-xs text-text-500 font-mono opacity-70">{formatTokens(stepFinish.tokens)}</span>
+            )}
+          </span>
+        </button>
+      )}
 
       <div
-        className={`grid transition-[grid-template-rows] duration-300 ease-in-out ${
-          expanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
-        }`}
+        className={
+          showStepsHeader
+            ? `grid transition-[grid-template-rows] duration-300 ease-in-out ${expanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`
+            : ''
+        }
       >
-        <div className="flex flex-col overflow-hidden">
-          {shouldRenderBody &&
+        <div className={showStepsHeader ? 'flex flex-col overflow-hidden' : 'flex flex-col'}>
+          {(!showStepsHeader || shouldRenderBody) &&
             parts.map((part, idx) => (
-              <ToolPartView key={part.id} part={part} isFirst={idx === 0} isLast={idx === parts.length - 1} />
+              <ToolPartView
+                key={part.id}
+                part={part}
+                isFirst={idx === 0}
+                isLast={idx === parts.length - 1}
+                compact={isSingleCompact}
+              />
             ))}
         </div>
       </div>

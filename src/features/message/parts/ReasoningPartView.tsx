@@ -3,7 +3,6 @@ import { ChevronDownIcon, LightbulbIcon, SpinnerIcon } from '../../../components
 import { ScrollArea } from '../../../components/ui'
 import { useDelayedRender } from '../../../hooks'
 import { useTheme } from '../../../hooks/useTheme'
-import { useSmoothStream } from '../../../hooks/useSmoothStream'
 import type { ReasoningPart } from '../../../types/message'
 
 // italic 默认不显示前导图标；如果后续要恢复，只改这里。
@@ -21,12 +20,7 @@ export const ReasoningPartView = memo(function ReasoningPartView({ part, isStrea
   const isPartStreaming = isStreaming && !part.time?.end
   const hasContent = !!rawText.trim()
 
-  // 使用 smooth streaming 实现打字机效果
-  const { displayText } = useSmoothStream(
-    rawText,
-    !!isPartStreaming,
-    { charDelay: 6, disableAnimation: !isPartStreaming }, // 稍快一点，因为是思考过程
-  )
+  const displayText = rawText
   const [expanded, setExpanded] = useState(false)
   const shouldRenderBody = useDelayedRender(expanded)
   const scrollAreaRef = useRef<HTMLDivElement>(null)
@@ -129,10 +123,11 @@ export const ReasoningPartView = memo(function ReasoningPartView({ part, isStrea
         >
           <div ref={summaryContainerRef} className="relative min-w-0 flex-1 overflow-hidden">
             <span className="relative inline-block min-w-0 max-w-full align-top">
-              <span className={`block min-w-0 italic ${summaryClassName}`}>
+              <span
+                className={`block min-w-0 italic ${summaryClassName} ${isPartStreaming ? 'reasoning-shimmer-text' : ''}`}
+              >
                 {expanded ? expandedMetaText : summaryText}
               </span>
-              {isPartStreaming && <span aria-hidden="true" className="reasoning-breath-bar" />}
             </span>
             <span
               ref={summaryMeasureRef}

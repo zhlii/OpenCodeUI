@@ -2,8 +2,18 @@
 // Store Exports
 // ============================================
 
-export { messageStore, useMessageStore, useSessionState } from './messageStore'
-export type { SessionState, RevertState, RevertHistoryItem } from './messageStore'
+export { messageStore } from './messageStore'
+export type { SessionState, RevertState, RevertHistoryItem } from './messageStoreTypes'
+export type { MessageStoreSnapshot, SessionStateSnapshot } from './messageStoreTypes'
+export {
+  useMessageStore,
+  useMessageStoreSelector,
+  useSessionState,
+  useCurrentSessionId,
+  useIsStreaming,
+  useMessages,
+  useUndoRedoState,
+} from './messageStoreHooks'
 
 export { childSessionStore, useChildSessions, useSessionFamily } from './childSessionStore'
 export type { ChildSessionInfo } from './childSessionStore'
@@ -24,8 +34,6 @@ export {
   matchesKeybinding,
 } from './keybindingStore'
 export type { KeybindingAction, KeybindingConfig, ParsedKeybinding } from './keybindingStore'
-
-export { messageCacheStore } from './messageCacheStore'
 
 export { themeStore } from './themeStore'
 export type { ColorMode, ThemeState } from './themeStore'

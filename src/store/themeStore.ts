@@ -88,6 +88,8 @@ export interface ThemeState {
   stepFinishDisplay: StepFinishDisplay
   /** 思考内容展示样式 */
   reasoningDisplayMode: ReasoningDisplayMode
+  /** 宽模式 */
+  wideMode: boolean
 }
 
 // ============================================
@@ -100,6 +102,7 @@ const STORAGE_KEY_CUSTOM_CSS = 'theme-custom-css'
 const STORAGE_KEY_COLLAPSE_USER_MESSAGES = 'collapse-user-messages'
 const STORAGE_KEY_STEP_FINISH_DISPLAY = 'step-finish-display'
 const STORAGE_KEY_REASONING_DISPLAY_MODE = 'reasoning-display-mode'
+const STORAGE_KEY_WIDE_MODE = 'chat-wide-mode'
 
 // ============================================
 // DOM Style Element IDs
@@ -134,6 +137,8 @@ class ThemeStore {
       /* ignore */
     }
 
+    const savedWideMode = localStorage.getItem(STORAGE_KEY_WIDE_MODE) === 'true'
+
     this.state = {
       presetId: savedPreset,
       colorMode: savedMode,
@@ -141,6 +146,7 @@ class ThemeStore {
       collapseUserMessages,
       stepFinishDisplay,
       reasoningDisplayMode,
+      wideMode: savedWideMode,
     }
   }
 
@@ -167,6 +173,9 @@ class ThemeStore {
   }
   get reasoningDisplayMode() {
     return this.state.reasoningDisplayMode
+  }
+  get wideMode() {
+    return this.state.wideMode
   }
 
   /** 获取当前主题预设（内置主题返回对象，自定义返回 undefined） */
@@ -245,6 +254,17 @@ class ThemeStore {
     this.state = { ...this.state, reasoningDisplayMode: mode }
     localStorage.setItem(STORAGE_KEY_REASONING_DISPLAY_MODE, mode)
     this.emit()
+  }
+
+  setWideMode(enabled: boolean) {
+    if (this.state.wideMode === enabled) return
+    this.state = { ...this.state, wideMode: enabled }
+    localStorage.setItem(STORAGE_KEY_WIDE_MODE, String(enabled))
+    this.emit()
+  }
+
+  toggleWideMode() {
+    this.setWideMode(!this.state.wideMode)
   }
 
   // ---- Theme Application ----

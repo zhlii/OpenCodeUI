@@ -735,6 +735,17 @@ textarea.custom-scrollbar::-webkit-scrollbar-thumb {
   animation: fade-in 200ms ease-out;
 }
 
+/* 滚动容器隐藏（containerReady=false 时），scroll-to-bottom 在此状态下完成 */
+.chat-scroll-hidden {
+  opacity: 0;
+}
+
+/* Session 加载 spinner — 延迟 150ms 才显示，快速加载时不闪烁 */
+.session-loading-indicator {
+  opacity: 0;
+  animation: fade-in 200ms ease-out 150ms forwards;
+}
+
 /* Modal 缩放进入动画 */
 .animate-scale-in {
   animation: scale-in 200ms cubic-bezier(0.16, 1, 0.3, 1);
@@ -771,6 +782,39 @@ textarea.custom-scrollbar::-webkit-scrollbar-thumb {
 
 .animate-breathe {
   animation: breathe 2.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+}
+
+@keyframes reasoning-shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+  100% {
+    background-position: -200% 0;
+  }
+}
+
+.reasoning-shimmer-text {
+  background: linear-gradient(
+    90deg,
+    hsl(var(--text-400)) 0%,
+    hsl(var(--text-300)) 35%,
+    hsl(var(--text-100)) 50%,
+    hsl(var(--text-300)) 65%,
+    hsl(var(--text-400)) 100%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: reasoning-shimmer 2.4s linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .reasoning-shimmer-text {
+    animation: none !important;
+    background: none;
+    -webkit-text-fill-color: currentColor;
+  }
 }
 
 @keyframes reasoning-breath-bar {
@@ -927,4 +971,18 @@ textarea.custom-scrollbar::-webkit-scrollbar-thumb {
 /* 内容隔离（用于动态内容区域） */
 .contain-content {
   contain: content;
+}
+
+/* ============================================
+ * Chat Message Item - content-visibility 优化
+ * ============================================
+ * 替代 react-virtuoso 虚拟列表：
+ * - content-visibility: auto 让浏览器跳过视口外元素的 layout/paint
+ * - contain-intrinsic-size: auto 500px 记住已渲染元素的实际高度，
+ *   未渲染过的元素使用 500px 估算（AI 助手消息含代码块通常 400-800px，
+ *   120px 估算差距过大会导致滚动时 scrollHeight 突变和视觉跳动）
+ */
+.chat-message-item {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 500px;
 }

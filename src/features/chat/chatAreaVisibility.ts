@@ -40,6 +40,9 @@ function endsWithTool(msg: Message): boolean {
   for (let i = msg.parts.length - 1; i >= 0; i--) {
     const p = msg.parts[i]
     if (p.type === 'snapshot' || p.type === 'patch' || p.type === 'step-start' || p.type === 'step-finish') continue
+    // skip empty reasoning / empty text — they carry no visible content
+    if (p.type === 'reasoning' && !(p as ReasoningPart).text?.trim()) continue
+    if (p.type === 'text' && (!(p as TextPart).text?.trim() || (p as TextPart).synthetic)) continue
     return p.type === 'tool'
   }
   return false
@@ -83,7 +86,16 @@ export interface VisibleMessageEntry {
 }
 
 export function buildVisibleMessageEntries(messages: Message[]): VisibleMessageEntry[] {
-  const filteredMessages = messages.filter(messageHasContent)
+  // 防御性去重：保证输入无重复 ID
+  const seenIds = new Set<string>()
+  const unique: Message[] = []
+  for (const m of messages) {
+    if (!seenIds.has(m.info.id)) {
+      seenIds.add(m.info.id)
+      unique.push(m)
+    }
+  }
+  const filteredMessages = unique.filter(messageHasContent)
   const result: VisibleMessageEntry[] = []
 
   for (let i = 0; i < filteredMessages.length; i++) {
@@ -103,7 +115,9 @@ export function buildVisibleMessageEntries(messages: Message[]): VisibleMessageE
       } else if (isMergeableTrailing(filteredMessages[j])) {
         sourceIds.push(filteredMessages[j].info.id)
         j++
-        break
+        // 如果该消息也以 tool 结尾（text 在 tool 前面，是中间说明不是结论），
+        // 继续合并链；只有 text 在 tool 后面（真正收尾）才终止
+        if (!endsWithTool(filteredMessages[j - 1])) break
       } else {
         break
       }
@@ -114,8 +128,10 @@ export function buildVisibleMessageEntries(messages: Message[]): VisibleMessageE
     } else {
       const mergedMessages = filteredMessages.slice(i + 1, j)
       const tailParts = mergedMessages.flatMap(message => message.parts)
+      // 合并后如果任何源消息在 streaming，合并结果也应该是 streaming
+      const anyStreaming = msg.isStreaming || mergedMessages.some(m => m.isStreaming)
       result.push({
-        message: { ...msg, parts: [...msg.parts, ...tailParts] },
+        message: { ...msg, parts: [...msg.parts, ...tailParts], isStreaming: anyStreaming },
         sourceIds,
       })
       i = j - 1

@@ -8,18 +8,6 @@ export const STORAGE_KEY_SELECTED_MODEL = 'selected-model-key'
 /** 选中的 agent */
 export const STORAGE_KEY_SELECTED_AGENT = 'selected-agent'
 
-/** 宽模式设置 */
-export const STORAGE_KEY_WIDE_MODE = 'chat-wide-mode'
-
-/** 主题模式 */
-export const STORAGE_KEY_THEME_MODE = 'theme-mode'
-
-/** 侧边栏宽度 */
-export const STORAGE_KEY_SIDEBAR_WIDTH = 'sidebar-width'
-
-/** 模型 variant 偏好前缀 */
-export const STORAGE_KEY_MODEL_VARIANT_PREFIX = 'model-variant-'
-
 /** 上次使用的项目目录 */
 export const STORAGE_KEY_LAST_DIRECTORY = 'last-directory'
 

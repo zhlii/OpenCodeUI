@@ -8,12 +8,12 @@ import { serverStore } from './store/serverStore'
 import { messageStore } from './store/messageStore'
 import { childSessionStore } from './store/childSessionStore'
 import { todoStore } from './store/todoStore'
-import { messageCacheStore } from './store/messageCacheStore'
 import { autoApproveStore } from './store/autoApproveStore'
 import { serviceStore } from './store/serviceStore'
 import { reconnectSSE } from './api/events'
 import { resetPathModeCache } from './utils/directoryUtils'
 import { isTauri } from './utils/tauri'
+import { apiErrorHandler, globalErrorHandler } from './utils/errorHandling'
 
 // Polyfill: randomUUID 在非 HTTPS 环境可能缺失（如局域网 HTTP）
 // 统一补齐，避免业务层 scattered fallback。
@@ -36,6 +36,12 @@ function ensureRandomUUID() {
 
 ensureRandomUUID()
 
+// 禁用浏览器的 scroll restoration（刷新时不恢复旧 scrollTop），
+// 由 ChatArea 自行控制定位
+if ('scrollRestoration' in history) {
+  history.scrollRestoration = 'manual'
+}
+
 // 初始化主题系统（在 React 渲染前注入 CSS 变量，避免闪烁）
 themeStore.init()
 
@@ -46,10 +52,7 @@ serverStore.onServerChange(() => {
   childSessionStore.clearAll()
   todoStore.clearAll()
 
-  // 2. 清空 IndexedDB 消息缓存
-  void messageCacheStore.clearAll()
-
-  // 3. 重置路径模式缓存（不同服务器可能是不同操作系统）
+  // 2. 重置路径模式缓存（不同服务器可能是不同操作系统）
   resetPathModeCache()
 
   // 4. 重新加载 auto-approve 开关状态（从新服务器的 storage key 读取）
@@ -92,7 +95,7 @@ if (isTauri()) {
         })
         .catch(err => {
           serviceStore.setStarting(false)
-          console.error('[Service] Failed to auto-start opencode serve:', err)
+          apiErrorHandler('auto-start opencode serve', err)
         })
     })
   }
@@ -100,12 +103,12 @@ if (isTauri()) {
 
 // 全局错误处理 - 防止未捕获错误导致页面刷新
 window.addEventListener('error', event => {
-  console.error('[Global Error]', event.error)
+  globalErrorHandler('uncaught error', event.error)
   event.preventDefault()
 })
 
 window.addEventListener('unhandledrejection', event => {
-  console.error('[Unhandled Promise Rejection]', event.reason)
+  globalErrorHandler('unhandled promise rejection', event.reason)
   event.preventDefault()
 })
 

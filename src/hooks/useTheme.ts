@@ -171,5 +171,9 @@ export function useTheme() {
     // 思考内容显示样式
     reasoningDisplayMode: state.reasoningDisplayMode,
     setReasoningDisplayMode,
+
+    // 宽模式
+    isWideMode: state.wideMode,
+    toggleWideMode: themeStore.toggleWideMode.bind(themeStore),
   }
 }

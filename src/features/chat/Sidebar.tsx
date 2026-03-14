@@ -3,7 +3,6 @@ import { SidePanel } from './sidebar/SidePanel'
 import { ProjectDialog } from './ProjectDialog'
 import { useDirectory } from '../../hooks'
 import { type ApiSession } from '../../api'
-import type { ThemeMode } from '../../hooks'
 
 const MIN_WIDTH = 240
 const MAX_WIDTH = 480
@@ -19,10 +18,6 @@ interface SidebarProps {
   onClose: () => void
   contextLimit?: number
   onOpenSettings?: () => void
-  themeMode?: ThemeMode
-  onThemeChange?: (mode: ThemeMode, event?: React.MouseEvent) => void
-  isWideMode?: boolean
-  onToggleWideMode?: () => void
   projectDialogOpen?: boolean
   onProjectDialogClose?: () => void
 }
@@ -36,10 +31,6 @@ export const Sidebar = memo(function Sidebar({
   onClose,
   contextLimit,
   onOpenSettings,
-  themeMode,
-  onThemeChange,
-  isWideMode,
-  onToggleWideMode,
   projectDialogOpen,
   onProjectDialogClose,
 }: SidebarProps) {
@@ -59,6 +50,8 @@ export const Sidebar = memo(function Sidebar({
   })
   const [isResizing, setIsResizing] = useState(false)
   const sidebarRef = useRef<HTMLDivElement>(null)
+  const currentWidthRef = useRef(width)
+  const rafRef = useRef<number>(0)
 
   const handleAddProject = useCallback(
     (path: string) => {
@@ -83,48 +76,52 @@ export const Sidebar = memo(function Sidebar({
     return () => window.removeEventListener('resize', checkMobile)
   }, [])
 
-  // Resize logic (desktop only)
-  useEffect(() => {
-    if (!isResizing || isMobile) return
-
-    const handleMouseMove = (e: MouseEvent) => {
-      const newWidth = Math.min(Math.max(e.clientX, MIN_WIDTH), MAX_WIDTH)
-      setWidth(newWidth)
-    }
-
-    const handleMouseUp = () => {
-      setIsResizing(false)
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-      localStorage.setItem('sidebar-width', width.toString())
-    }
-
-    document.addEventListener('mousemove', handleMouseMove)
-    document.addEventListener('mouseup', handleMouseUp)
-
-    return () => {
-      document.removeEventListener('mousemove', handleMouseMove)
-      document.removeEventListener('mouseup', handleMouseUp)
-    }
-  }, [isResizing, width, isMobile])
-
-  // Save width
-  useEffect(() => {
-    if (!isResizing && !isMobile) {
-      localStorage.setItem('sidebar-width', width.toString())
-    }
-  }, [width, isResizing, isMobile])
-
+  // Resize logic (desktop only) — 纯 DOM 操作，不触发 React re-render
   const startResizing = useCallback(
     (e: React.MouseEvent) => {
       if (isMobile) return
       e.preventDefault()
+
+      const sidebar = sidebarRef.current
+      if (!sidebar) return
+
       setIsResizing(true)
       document.body.style.cursor = 'col-resize'
       document.body.style.userSelect = 'none'
+
+      const handleMouseMove = (moveEvent: MouseEvent) => {
+        if (rafRef.current) cancelAnimationFrame(rafRef.current)
+        rafRef.current = requestAnimationFrame(() => {
+          const newWidth = Math.min(Math.max(moveEvent.clientX, MIN_WIDTH), MAX_WIDTH)
+          sidebar.style.width = `${newWidth}px`
+          currentWidthRef.current = newWidth
+        })
+      }
+
+      const handleMouseUp = () => {
+        if (rafRef.current) cancelAnimationFrame(rafRef.current)
+        document.body.style.cursor = ''
+        document.body.style.userSelect = ''
+        document.removeEventListener('mousemove', handleMouseMove)
+        document.removeEventListener('mouseup', handleMouseUp)
+
+        // 拖拽结束：同步 state + 持久化
+        const finalWidth = currentWidthRef.current
+        setWidth(finalWidth)
+        setIsResizing(false)
+        localStorage.setItem('sidebar-width', finalWidth.toString())
+      }
+
+      document.addEventListener('mousemove', handleMouseMove)
+      document.addEventListener('mouseup', handleMouseUp)
     },
     [isMobile],
   )
+
+  // 同步 width state → ref（isOpen 切换时 width 可能从外部改变）
+  useEffect(() => {
+    currentWidthRef.current = width
+  }, [width])
 
   // 移动端遮罩点击关闭
   const handleBackdropClick = useCallback(() => {
@@ -236,10 +233,6 @@ export const Sidebar = memo(function Sidebar({
             onToggleSidebar={onClose} // 移动端 toggle 就是关闭
             contextLimit={contextLimit}
             onOpenSettings={onOpenSettings}
-            themeMode={themeMode}
-            onThemeChange={onThemeChange}
-            isWideMode={isWideMode}
-            onToggleWideMode={onToggleWideMode}
           />
         </div>
 
@@ -278,10 +271,6 @@ export const Sidebar = memo(function Sidebar({
           onToggleSidebar={handleToggle}
           contextLimit={contextLimit}
           onOpenSettings={onOpenSettings}
-          themeMode={themeMode}
-          onThemeChange={onThemeChange}
-          isWideMode={isWideMode}
-          onToggleWideMode={onToggleWideMode}
         />
 
         {/* Resizer Handle (Desktop only, when expanded) */}

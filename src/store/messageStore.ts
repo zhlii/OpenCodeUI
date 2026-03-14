@@ -3,419 +3,36 @@
 // ============================================
 //
 // 核心设计：
-// 1. 每个 session 的消息独立存储，session 切换只改变 currentSessionId
-// 2. Undo/Redo 通过 revertState 实现，不重新加载消息
-// 3. SSE 更新直接修改对应 session 的消息
-// 4. 使用发布-订阅模式通知 React 组件更新
+// 1. 每个 session 的消息独立存储在内存中，session 切换只改变 currentSessionId
+// 2. SSE 事件直接修改对应 session 的消息（找不到则丢弃）
+// 3. Undo/Redo 通过 revertState 实现
+// 4. RAF 批量通知 React 组件更新
 
 import type { Message, Part, MessageInfo, FilePart, AgentPart } from '../types/message'
 import type { ApiMessageWithParts, ApiMessage, ApiPart, ApiSession, Attachment } from '../api/types'
-import { MAX_HISTORY_MESSAGES, MESSAGE_PART_PERSIST_THRESHOLD, MESSAGE_PREFETCH_BUFFER } from '../constants'
-import { messageCacheStore } from './messageCacheStore'
+import { logger } from '../utils/logger'
+import type { RevertState, RevertHistoryItem, SessionState, SendRollbackSnapshot } from './messageStoreTypes'
 
-// ============================================
-// Types
-// ============================================
-
-export interface RevertState {
-  /** 撤销点的消息 ID */
-  messageId: string
-  /** 撤销历史栈 - 用于多步 redo */
-  history: RevertHistoryItem[]
-}
-
-export interface RevertHistoryItem {
-  messageId: string
-  text: string
-  attachments: unknown[]
-  model?: { providerID: string; modelID: string }
-  variant?: string
-  agent?: string
-}
-
-export interface SessionState {
-  /** 所有消息（包括被撤销的） */
-  messages: Message[]
-  /** 撤销状态 */
-  revertState: RevertState | null
-  /** 是否正在 streaming */
-  isStreaming: boolean
-  /** 加载状态 */
-  loadState: 'idle' | 'loading' | 'loaded' | 'error'
-  /** 向前加载的消息数（用于虚拟滚动定位） */
-  prependedCount: number
-  /** 是否还有更多历史消息 */
-  hasMoreHistory: boolean
-  /** session 目录 */
-  directory: string
-  /** 分享链接 */
-  shareUrl?: string
-  /** 断线重连后是否需要重新全量拉取 */
-  isStale: boolean
-}
-
-export interface SendRollbackSnapshot {
-  messages: Message[]
-  revertState: RevertState | null
-}
+// Re-export types for consumers
+export type { RevertState, RevertHistoryItem, SessionState, SendRollbackSnapshot } from './messageStoreTypes'
 
 type Subscriber = () => void
 
-type PendingPartEvent =
-  | {
-      kind: 'updated'
-      order: number
-      data: ApiPart & { sessionID: string; messageID: string }
-    }
-  | {
-      kind: 'delta'
-      order: number
-      data: { sessionID: string; messageID: string; partID: string; field: string; delta: string }
-    }
-  | {
-      kind: 'removed'
-      order: number
-      data: { id: string; messageID: string; sessionID: string }
-    }
-
-// ============================================
-// Store Implementation
-// ============================================
-
-/** 最多缓存的 session 数量，超过时淘汰最久未访问的 */
 const MAX_CACHED_SESSIONS = 10
 
 class MessageStore {
   private sessions = new Map<string, SessionState>()
   private currentSessionId: string | null = null
   private subscribers = new Set<Subscriber>()
-  /** LRU 追踪：sessionId -> 最后访问时间 */
   private sessionAccessTime = new Map<string, number>()
-
-  // ============================================
-  // 批量更新优化
-  // ============================================
-
-  /** 是否有待处理的通知 */
   private pendingNotify = false
-  /** 用于 RAF 的 ID */
   private rafId: number | null = null
-  /** visibleMessages 缓存 */
-  private visibleMessagesCache: Message[] | null = null
-  private visibleMessagesCacheSessionId: string | null = null
-  private visibleMessagesCacheRevertId: string | null = null
-  private visibleMessagesCacheLength: number = 0
+  // delta 批量化：追踪被 mutable 修改过的消息，在 notify 前统一做不可变快照
+  private dirtyMessages = new Set<string>() // messageID set
+  private dirtySessionId: string | null = null
 
   // ============================================
-  // Parts Hydration Cache
-  // ============================================
-
-  private hydratedMessageIds = new Set<string>()
-  private persistedMessageKeys = new Set<string>()
-  private hydratedMessageKeys = new Set<string>()
-  private pendingPartEvents = new Map<string, PendingPartEvent[]>()
-  private pendingPartOrder = 0
-
-  private makeMessageKey(sessionId: string, messageId: string): string {
-    return `${sessionId}:${messageId}`
-  }
-
-  private nextPendingPartOrder(): number {
-    this.pendingPartOrder += 1
-    return this.pendingPartOrder
-  }
-
-  private getPendingEventPartId(event: PendingPartEvent): string {
-    switch (event.kind) {
-      case 'updated':
-        return event.data.id
-      case 'delta':
-        return event.data.partID
-      case 'removed':
-        return event.data.id
-    }
-  }
-
-  private purgePendingPartEventsForSession(sessionId: string) {
-    const prefix = `${sessionId}:`
-    for (const key of this.pendingPartEvents.keys()) {
-      if (key.startsWith(prefix)) {
-        this.pendingPartEvents.delete(key)
-      }
-    }
-  }
-
-  private enqueuePendingPartEvent(sessionId: string, messageId: string, event: PendingPartEvent) {
-    const key = this.makeMessageKey(sessionId, messageId)
-    const existing = this.pendingPartEvents.get(key) ?? []
-    existing.push(event)
-    this.pendingPartEvents.set(key, existing)
-  }
-
-  private hasMessageWithResidentParts(messageId: string): boolean {
-    for (const state of this.sessions.values()) {
-      if (state.messages.some(message => message.info.id === messageId && message.parts.length > 0)) {
-        return true
-      }
-    }
-    return false
-  }
-
-  private cleanupMessageCacheState(sessionId: string, messageIds: string[]) {
-    const uniqueIds = Array.from(new Set(messageIds))
-    if (uniqueIds.length === 0) return
-
-    for (const messageId of uniqueIds) {
-      const key = this.makeMessageKey(sessionId, messageId)
-      this.persistedMessageKeys.delete(key)
-      this.hydratedMessageKeys.delete(key)
-      this.pendingPartEvents.delete(key)
-
-      if (!this.hasMessageWithResidentParts(messageId)) {
-        this.hydratedMessageIds.delete(messageId)
-      }
-    }
-
-    void messageCacheStore.deleteMessagePartsBatch(sessionId, uniqueIds)
-  }
-
-  // ============================================
-  // Message Trimming (Memory Guard)
-  // ============================================
-
-  private trimMessagesIfNeeded(sessionId: string, state: SessionState) {
-    const excess = state.messages.length - MAX_HISTORY_MESSAGES
-    if (excess <= 0) return
-
-    if (import.meta.env.DEV) {
-      console.warn('[MessageStore] Trimming messages for session:', sessionId, 'excess:', excess)
-    }
-
-    const removedMessageIds = state.messages.slice(0, excess).map(message => message.info.id)
-
-    state.messages = state.messages.slice(excess)
-    state.prependedCount = Math.max(0, state.prependedCount - excess)
-    state.hasMoreHistory = false
-
-    this.cleanupMessageCacheState(sessionId, removedMessageIds)
-
-    if (state.revertState) {
-      const remainingIds = new Set(state.messages.map(m => m.info.id))
-      if (!remainingIds.has(state.revertState.messageId)) {
-        state.revertState = null
-      } else if (state.revertState.history.length > 0) {
-        state.revertState.history = state.revertState.history.filter(item => remainingIds.has(item.messageId))
-        if (state.revertState.history.length === 0) {
-          state.revertState = null
-        }
-      }
-    }
-  }
-
-  // ============================================
-  // Parts Hydration & Persistence
-  // ============================================
-
-  getHydratedMessageIds(): Set<string> {
-    return this.hydratedMessageIds
-  }
-
-  private markMessageHydrated(sessionId: string, messageId: string) {
-    this.hydratedMessageIds.add(messageId)
-    this.hydratedMessageKeys.add(this.makeMessageKey(sessionId, messageId))
-  }
-
-  private markMessagePersisted(sessionId: string, messageId: string) {
-    this.persistedMessageKeys.add(this.makeMessageKey(sessionId, messageId))
-  }
-
-  private isMessagePersisted(sessionId: string, messageId: string): boolean {
-    return this.persistedMessageKeys.has(this.makeMessageKey(sessionId, messageId))
-  }
-
-  private purgePersistedKeysForSession(sessionId: string) {
-    const prefix = `${sessionId}:`
-    for (const key of this.persistedMessageKeys) {
-      if (key.startsWith(prefix)) {
-        this.persistedMessageKeys.delete(key)
-      }
-    }
-    for (const key of this.hydratedMessageKeys) {
-      if (key.startsWith(prefix)) {
-        this.hydratedMessageKeys.delete(key)
-      }
-    }
-  }
-
-  private computeMessageSize(message: Message): number {
-    let total = 0
-    for (const part of message.parts) {
-      if (part.type === 'text' || part.type === 'reasoning') {
-        total += part.text.length
-      } else if (part.type === 'tool') {
-        const state = part.state
-        if (state.input) total += JSON.stringify(state.input).length
-        if (state.output) total += state.output.length
-        if (state.error) total += String(state.error).length
-        if (state.metadata) total += JSON.stringify(state.metadata).length
-      } else if (part.type === 'file') {
-        if (part.source?.text?.value) total += part.source.text.value.length
-      } else if (part.type === 'agent') {
-        if (part.source?.value) total += part.source.value.length
-      } else if (part.type === 'subtask') {
-        total += part.prompt.length + part.description.length
-      } else if (part.type === 'snapshot') {
-        total += part.snapshot.length
-      } else if (part.type === 'patch') {
-        total += part.files.join('').length
-      }
-    }
-    return total
-  }
-
-  private cloneMessage(message: Message): Message {
-    return {
-      ...message,
-      parts: [...message.parts],
-    }
-  }
-
-  private cloneRevertState(revertState: RevertState | null): RevertState | null {
-    if (!revertState) return null
-    return {
-      ...revertState,
-      history: revertState.history.map(item => ({
-        ...item,
-        attachments: [...item.attachments],
-      })),
-    }
-  }
-
-  private getTailKeepIds(state: SessionState): string[] {
-    const totalMessages = state.messages.length
-    if (totalMessages === 0) return []
-    const tailSize = Math.max(60, MESSAGE_PREFETCH_BUFFER * 2)
-    const keepFrom = Math.max(0, totalMessages - tailSize)
-    return state.messages.slice(keepFrom).map(m => m.info.id)
-  }
-
-  private scheduleEvictAfterPersist(sessionId: string, state: SessionState) {
-    void this.persistSessionParts(sessionId, state, true).then(() => {
-      const latestState = this.sessions.get(sessionId)
-      if (!latestState) return
-      const keepIds = this.getTailKeepIds(latestState)
-      if (keepIds.length > 0) {
-        this.evictMessageParts(sessionId, keepIds)
-      }
-    })
-  }
-
-  private async persistMessagePartsIfNeeded(sessionId: string, message: Message, force: boolean = false) {
-    if (!message.parts.length) return
-    if (message.isStreaming) return
-    const size = this.computeMessageSize(message)
-    if (!force && size < MESSAGE_PART_PERSIST_THRESHOLD) return
-    await messageCacheStore.setMessageParts(sessionId, message.info.id, message.parts)
-    this.markMessagePersisted(sessionId, message.info.id)
-  }
-
-  private syncPersistedMessageCache(sessionId: string, message: Message) {
-    if (message.isStreaming) return
-
-    if (message.parts.length === 0) {
-      this.cleanupMessageCacheState(sessionId, [message.info.id])
-      return
-    }
-
-    if (!this.isMessagePersisted(sessionId, message.info.id)) return
-
-    this.markMessageHydrated(sessionId, message.info.id)
-    void messageCacheStore.setMessageParts(sessionId, message.info.id, message.parts)
-  }
-
-  private async persistSessionParts(sessionId: string, state: SessionState, force: boolean = false) {
-    for (const message of state.messages) {
-      await this.persistMessagePartsIfNeeded(sessionId, message, force)
-    }
-  }
-
-  async hydrateMessageParts(sessionId: string, messageId: string): Promise<boolean> {
-    if (this.hydratedMessageKeys.has(this.makeMessageKey(sessionId, messageId))) return true
-    const state = this.sessions.get(sessionId)
-    if (!state) return false
-
-    const msgIndex = state.messages.findIndex(m => m.info.id === messageId)
-    if (msgIndex === -1) return false
-
-    const message = state.messages[msgIndex]
-    if (message.parts.length > 0) {
-      this.markMessageHydrated(sessionId, messageId)
-      return true
-    }
-
-    if (!this.isMessagePersisted(sessionId, messageId)) return false
-    const cached = await messageCacheStore.getMessageParts(sessionId, messageId)
-    if (!cached) return false
-
-    const newMessage: Message = { ...message, parts: cached.parts as Part[] }
-    state.messages = [...state.messages.slice(0, msgIndex), newMessage, ...state.messages.slice(msgIndex + 1)]
-
-    this.markMessageHydrated(sessionId, messageId)
-    this.notify()
-    return true
-  }
-
-  async prefetchMessageParts(sessionId: string, messageIds: string[]) {
-    if (!messageIds.length) return
-    const trimmed = messageIds.slice(0, MESSAGE_PREFETCH_BUFFER)
-    for (const id of trimmed) {
-      if (this.hydratedMessageKeys.has(this.makeMessageKey(sessionId, id))) continue
-      const state = this.sessions.get(sessionId)
-      if (!state) break
-      const msg = state.messages.find(m => m.info.id === id)
-      if (!msg) continue
-      if (msg.parts.length > 0) {
-        this.markMessageHydrated(sessionId, id)
-        continue
-      }
-      if (!this.isMessagePersisted(sessionId, id)) continue
-      const cached = await messageCacheStore.getMessageParts(sessionId, id)
-      if (!cached) continue
-      const msgIndex = state.messages.findIndex(m => m.info.id === id)
-      if (msgIndex === -1) continue
-      const newMessage: Message = { ...state.messages[msgIndex], parts: cached.parts as Part[] }
-      state.messages = [...state.messages.slice(0, msgIndex), newMessage, ...state.messages.slice(msgIndex + 1)]
-      this.markMessageHydrated(sessionId, id)
-    }
-    this.notify()
-  }
-
-  // 释放非关键消息的 parts（保持可用但不常驻内存）
-  evictMessageParts(sessionId: string, keepMessageIds: string[]) {
-    const state = this.sessions.get(sessionId)
-    if (!state) return
-    const keep = new Set(keepMessageIds)
-    let updated = false
-
-    state.messages = state.messages.map(msg => {
-      if (keep.has(msg.info.id)) return msg
-      if (msg.parts.length === 0) return msg
-      if (msg.isStreaming) return msg
-      if (msg.info.role === 'user') return msg
-      if (!this.isMessagePersisted(sessionId, msg.info.id)) return msg
-
-      updated = true
-      this.hydratedMessageKeys.delete(this.makeMessageKey(sessionId, msg.info.id))
-      return { ...msg, parts: [] }
-    })
-
-    if (updated) {
-      this.notify()
-    }
-  }
-
-  // ============================================
-  // Subscription
+  // Subscription & Notification
   // ============================================
 
   subscribe(fn: Subscriber): () => void {
@@ -423,46 +40,63 @@ class MessageStore {
     return () => this.subscribers.delete(fn)
   }
 
-  /**
-   * 使用 requestAnimationFrame 合并多次 notify 调用
-   * 在 streaming 时可以避免每个 part 更新都触发重渲染
-   */
   private notify() {
-    // 清除 visibleMessages 缓存
-    this.visibleMessagesCache = null
-
     if (this.pendingNotify) return
-
     this.pendingNotify = true
 
-    // 使用 RAF 批量处理
     if (typeof requestAnimationFrame !== 'undefined') {
       this.rafId = requestAnimationFrame(() => {
         this.pendingNotify = false
         this.rafId = null
+        this.flushDirtyMessages()
         this.subscribers.forEach(fn => fn())
       })
     } else {
-      // SSR 或不支持 RAF 的环境，直接同步通知
       this.pendingNotify = false
+      this.flushDirtyMessages()
       this.subscribers.forEach(fn => fn())
     }
   }
 
   /**
-   * 立即通知（用于关键操作，如 session 切换）
+   * 将 delta 期间 mutable 修改过的消息做一次不可变快照。
+   * 这样一帧内多个 delta 只产生一次数组拷贝，而不是每个 delta 都拷贝。
    */
-  private notifyImmediate() {
-    // 清除缓存
-    this.visibleMessagesCache = null
+  private flushDirtyMessages() {
+    if (this.dirtyMessages.size === 0 || !this.dirtySessionId) return
 
-    // 取消待处理的 RAF
+    const state = this.sessions.get(this.dirtySessionId)
+    if (!state) {
+      this.dirtyMessages.clear()
+      this.dirtySessionId = null
+      return
+    }
+
+    // 只对被标记 dirty 的消息生成新引用（包括 parts 内的对象）
+    let changed = false
+    const newMessages = state.messages.map(m => {
+      if (this.dirtyMessages.has(m.info.id)) {
+        changed = true
+        return { ...m, parts: m.parts.map(p => ({ ...p })) }
+      }
+      return m
+    })
+
+    if (changed) {
+      state.messages = newMessages
+    }
+
+    this.dirtyMessages.clear()
+    this.dirtySessionId = null
+  }
+
+  private notifyImmediate() {
     if (this.rafId !== null) {
       cancelAnimationFrame(this.rafId)
       this.rafId = null
     }
     this.pendingNotify = false
-
+    this.flushDirtyMessages()
     this.subscribers.forEach(fn => fn())
   }
 
@@ -483,54 +117,15 @@ class MessageStore {
     return this.sessions.get(this.currentSessionId)
   }
 
-  /**
-   * 获取当前 session 的可见消息（基于 revert 状态过滤）
-   * 带缓存优化，避免频繁创建新数组
-   */
   getVisibleMessages(): Message[] {
     const state = this.getCurrentSessionState()
-    if (!state) {
-      return []
-    }
+    if (!state) return []
 
     const { messages, revertState } = state
-    const sessionId = this.currentSessionId
-    const revertId = revertState?.messageId ?? null
+    if (!revertState) return messages
 
-    // 检查缓存是否有效
-    if (
-      this.visibleMessagesCache !== null &&
-      this.visibleMessagesCacheSessionId === sessionId &&
-      this.visibleMessagesCacheRevertId === revertId &&
-      this.visibleMessagesCacheLength === messages.length
-    ) {
-      // 缓存命中，直接返回
-      return this.visibleMessagesCache
-    }
-
-    // 计算可见消息
-    let visibleMessages: Message[]
-
-    if (!revertState) {
-      visibleMessages = messages
-    } else {
-      // 找到 revert 点，只返回之前的消息
-      const revertIndex = messages.findIndex(m => m.info.id === revertState.messageId)
-      if (revertIndex === -1) {
-        // 找不到 revert 点，返回所有消息
-        visibleMessages = messages
-      } else {
-        visibleMessages = messages.slice(0, revertIndex)
-      }
-    }
-
-    // 更新缓存
-    this.visibleMessagesCache = visibleMessages
-    this.visibleMessagesCacheSessionId = sessionId
-    this.visibleMessagesCacheRevertId = revertId
-    this.visibleMessagesCacheLength = messages.length
-
-    return visibleMessages
+    const revertIndex = messages.findIndex(m => m.info.id === revertState.messageId)
+    return revertIndex === -1 ? messages : messages.slice(0, revertIndex)
   }
 
   getIsStreaming(): boolean {
@@ -542,7 +137,7 @@ class MessageStore {
   }
 
   getPrependedCount(): number {
-    return this.getCurrentSessionState()?.prependedCount ?? 0
+    return 0
   }
 
   getHasMoreHistory(): boolean {
@@ -569,38 +164,23 @@ class MessageStore {
   // Session Management
   // ============================================
 
-  /**
-   * 切换当前 session（不触发数据加载）
-   */
   setCurrentSession(sessionId: string | null) {
     if (this.currentSessionId === sessionId) return
-
     this.currentSessionId = sessionId
-    this.hydratedMessageIds.clear()
-    this.hydratedMessageKeys.clear()
-    // 使用立即通知，确保 session 切换立即生效
     this.notifyImmediate()
   }
 
-  /**
-   * 初始化 session 状态（如果不存在）
-   * 包含 LRU 淘汰机制，防止内存无限增长
-   */
   private ensureSession(sessionId: string): SessionState {
-    // 更新访问时间
     this.sessionAccessTime.set(sessionId, Date.now())
 
     let state = this.sessions.get(sessionId)
     if (!state) {
-      // 检查是否需要淘汰旧 session
       this.evictOldSessions()
-
       state = {
         messages: [],
         revertState: null,
         isStreaming: false,
         loadState: 'idle',
-        prependedCount: 0,
         hasMoreHistory: false,
         directory: '',
         shareUrl: undefined,
@@ -611,22 +191,16 @@ class MessageStore {
     return state
   }
 
-  /**
-   * LRU 淘汰：当 session 数量超过限制时，清除最久未访问的
-   */
   private evictOldSessions() {
     if (this.sessions.size < MAX_CACHED_SESSIONS) return
 
-    // 找出最久未访问的 session（排除当前 session）
     let oldestId: string | null = null
     let oldestTime = Infinity
 
     for (const [id, time] of this.sessionAccessTime) {
-      // 不淘汰当前 session 和正在 streaming 的 session
       if (id === this.currentSessionId) continue
       const state = this.sessions.get(id)
       if (state?.isStreaming) continue
-
       if (time < oldestTime) {
         oldestTime = time
         oldestId = id
@@ -634,19 +208,12 @@ class MessageStore {
     }
 
     if (oldestId) {
-      console.log('[MessageStore] Evicting old session:', oldestId)
+      logger.log('[MessageStore] Evicting old session:', oldestId)
       this.sessions.delete(oldestId)
       this.sessionAccessTime.delete(oldestId)
-      this.purgePersistedKeysForSession(oldestId)
-      this.purgePendingPartEventsForSession(oldestId)
-      void messageCacheStore.clearSession(oldestId)
     }
   }
 
-  /**
-   * 更新 session 元数据（不覆盖消息）
-   * 用于切换到正在 streaming 的 session 时，仍需加载 hasMoreHistory/directory 等
-   */
   updateSessionMetadata(
     sessionId: string,
     options: {
@@ -669,30 +236,24 @@ class MessageStore {
 
   markAllSessionsStale() {
     let updated = false
-
     for (const state of this.sessions.values()) {
       if (state.loadState !== 'loaded' || state.isStale) continue
       state.isStale = true
       updated = true
     }
-
-    if (updated) {
-      this.notify()
-    }
+    if (updated) this.notify()
   }
 
-  /**
-   * 设置 session 加载状态
-   */
   setLoadState(sessionId: string, loadState: SessionState['loadState']) {
     const state = this.ensureSession(sessionId)
     state.loadState = loadState
     this.notify()
   }
 
-  /**
-   * 设置 session 消息（初始加载时使用）
-   */
+  // ============================================
+  // Message CRUD
+  // ============================================
+
   setMessages(
     sessionId: string,
     apiMessages: ApiMessageWithParts[],
@@ -704,24 +265,19 @@ class MessageStore {
     },
   ) {
     const state = this.ensureSession(sessionId)
-    const previousMessageIds = state.messages.map(message => message.info.id)
 
-    // 转换 API 消息为 UI 消息
     state.messages = apiMessages.map(this.convertApiMessage)
     state.loadState = 'loaded'
-    state.prependedCount = 0
     state.hasMoreHistory = options?.hasMoreHistory ?? false
     state.directory = options?.directory ?? ''
     state.shareUrl = options?.shareUrl
     state.isStale = false
 
-    // 处理 revert 状态
+    // Revert 状态
     if (options?.revertState?.messageID) {
       const revertIndex = state.messages.findIndex(m => m.info.id === options.revertState!.messageID)
       if (revertIndex !== -1) {
-        // 从 revert 点开始收集用户消息，构建 redo 历史
         const revertedUserMessages = state.messages.slice(revertIndex).filter(m => m.info.role === 'user')
-
         state.revertState = {
           messageId: options.revertState.messageID,
           history: revertedUserMessages.map(m => {
@@ -745,88 +301,45 @@ class MessageStore {
       state.revertState = null
     }
 
-    this.purgePendingPartEventsForSession(sessionId)
-
-    const currentMessageIds = new Set(state.messages.map(message => message.info.id))
-    const removedMessageIds = previousMessageIds.filter(messageId => !currentMessageIds.has(messageId))
-    this.cleanupMessageCacheState(sessionId, removedMessageIds)
-
-    // 检查最后一条消息是否在 streaming
+    // Streaming 检测
     const lastMsg = state.messages[state.messages.length - 1]
     if (lastMsg?.info.role === 'assistant') {
       const assistantInfo = lastMsg.info as { time?: { completed?: number } }
       const isLastMsgStreaming = !assistantInfo.time?.completed
       state.isStreaming = isLastMsgStreaming
-
-      // 关键：如果正在 streaming，需要把最后一条消息的 isStreaming 也设为 true
-      // 这样 TextPartView 才能正确启用打字机效果
-      if (isLastMsgStreaming && state.messages.length > 0) {
+      if (isLastMsgStreaming) {
         const lastIndex = state.messages.length - 1
-        state.messages[lastIndex] = {
-          ...state.messages[lastIndex],
-          isStreaming: true,
-        }
+        state.messages[lastIndex] = { ...state.messages[lastIndex], isStreaming: true }
       }
     } else {
       state.isStreaming = false
     }
 
-    this.scheduleEvictAfterPersist(sessionId, state)
-
-    for (const message of state.messages) {
-      if (message.parts.length > 0) {
-        this.markMessageHydrated(sessionId, message.info.id)
-      }
-    }
-
-    this.trimMessagesIfNeeded(sessionId, state)
-
     this.notify()
   }
 
-  /**
-   * 向前添加历史消息（懒加载更多历史）
-   */
   prependMessages(sessionId: string, apiMessages: ApiMessageWithParts[], hasMore: boolean) {
     const state = this.sessions.get(sessionId)
     if (!state) return
 
     const newMessages = apiMessages.map(this.convertApiMessage)
-    state.messages = [...newMessages, ...state.messages]
-    state.prependedCount += newMessages.length
+
+    // 去重
+    const existingIds = new Set(state.messages.map(m => m.info.id))
+    const unique = newMessages.filter(m => !existingIds.has(m.info.id))
+
+    if (unique.length > 0) {
+      state.messages = [...unique, ...state.messages]
+    }
     state.hasMoreHistory = hasMore
-
-    this.trimMessagesIfNeeded(sessionId, state)
-
-    const persistBatch = newMessages.map(message => this.persistMessagePartsIfNeeded(sessionId, message, true))
-    void Promise.all(persistBatch).then(() => {
-      const latestState = this.sessions.get(sessionId)
-      if (!latestState) return
-      const keepIds = this.getTailKeepIds(latestState)
-      if (keepIds.length > 0) {
-        this.evictMessageParts(sessionId, keepIds)
-      }
-    })
 
     this.notify()
   }
 
-  /**
-   * 清空所有 session 数据（服务器切换时调用）
-   */
   clearAll() {
     this.currentSessionId = null
     this.sessions.clear()
     this.sessionAccessTime.clear()
-    this.hydratedMessageIds.clear()
-    this.persistedMessageKeys.clear()
-    this.hydratedMessageKeys.clear()
-    this.pendingPartEvents.clear()
-    this.pendingPartOrder = 0
-    this.visibleMessagesCache = null
-    this.visibleMessagesCacheSessionId = null
-    this.visibleMessagesCacheRevertId = null
-    this.visibleMessagesCacheLength = 0
     if (this.rafId !== null) {
       cancelAnimationFrame(this.rafId)
       this.rafId = null
@@ -835,23 +348,15 @@ class MessageStore {
     this.notifyImmediate()
   }
 
-  /**
-   * 清空 session（用于新建对话）
-   */
   clearSession(sessionId: string) {
     this.sessions.delete(sessionId)
     this.sessionAccessTime.delete(sessionId)
-    this.hydratedMessageIds.clear()
-    this.purgePersistedKeysForSession(sessionId)
-    this.purgePendingPartEventsForSession(sessionId)
-    void messageCacheStore.clearSession(sessionId)
     this.notify()
   }
 
   setShareUrl(sessionId: string, url: string | undefined) {
     const state = this.sessions.get(sessionId)
     if (!state) return
-
     state.shareUrl = url
     this.notify()
   }
@@ -860,358 +365,127 @@ class MessageStore {
   // SSE Event Handlers
   // ============================================
 
-  private applyPartUpdated(
-    apiPart: ApiPart & { sessionID: string; messageID: string },
-    options?: { order?: number; appliedOrders?: Map<string, number> },
-  ): boolean {
-    const state = this.sessions.get(apiPart.sessionID)
-    if (!state) return false
-
-    const msgIndex = state.messages.findIndex(m => m.info.id === apiPart.messageID)
-    if (msgIndex === -1) return false
-
-    const oldMessage = state.messages[msgIndex]
-    const newMessage = { ...oldMessage, parts: [...oldMessage.parts] }
-    const existingPartIndex = newMessage.parts.findIndex(p => p.id === apiPart.id)
-
-    if (existingPartIndex >= 0) {
-      newMessage.parts[existingPartIndex] = apiPart as Part
-    } else {
-      newMessage.parts.push(apiPart as Part)
-    }
-
-    state.messages = [...state.messages.slice(0, msgIndex), newMessage, ...state.messages.slice(msgIndex + 1)]
-
-    void this.persistMessagePartsIfNeeded(apiPart.sessionID, newMessage)
-    this.syncPersistedMessageCache(apiPart.sessionID, newMessage)
-    this.markMessageHydrated(apiPart.sessionID, newMessage.info.id)
-
-    if (options?.order !== undefined) {
-      options.appliedOrders?.set(apiPart.id, options.order)
-    }
-
-    return true
-  }
-
-  private applyPartDelta(
-    data: { sessionID: string; messageID: string; partID: string; field: string; delta: string },
-    options?: { order?: number; appliedOrders?: Map<string, number> },
-  ): boolean {
-    const state = this.sessions.get(data.sessionID)
-    if (!state) return false
-
-    const msgIndex = state.messages.findIndex(m => m.info.id === data.messageID)
-    if (msgIndex === -1) return false
-
-    const oldMessage = state.messages[msgIndex]
-    const partIndex = oldMessage.parts.findIndex(p => p.id === data.partID)
-    if (partIndex === -1) return false
-
-    const oldPart = oldMessage.parts[partIndex]
-    if (!(data.field === 'text' && 'text' in oldPart)) return false
-
-    const newPart = { ...oldPart, text: oldPart.text + data.delta }
-    const newParts = [...oldMessage.parts]
-    newParts[partIndex] = newPart as Part
-
-    const newMessage = { ...oldMessage, parts: newParts }
-    state.messages = [...state.messages.slice(0, msgIndex), newMessage, ...state.messages.slice(msgIndex + 1)]
-    this.syncPersistedMessageCache(data.sessionID, newMessage)
-
-    if (options?.order !== undefined) {
-      options.appliedOrders?.set(data.partID, options.order)
-    }
-
-    return true
-  }
-
-  private applyPartRemoved(
-    data: { id: string; messageID: string; sessionID: string },
-    options?: { order?: number; appliedOrders?: Map<string, number> },
-  ): boolean {
-    const state = this.sessions.get(data.sessionID)
-    if (!state) return false
-
-    const msgIndex = state.messages.findIndex(m => m.info.id === data.messageID)
-    if (msgIndex === -1) return false
-
-    const oldMessage = state.messages[msgIndex]
-    if (!oldMessage.parts.some(p => p.id === data.id)) return false
-
-    const newMessage = {
-      ...oldMessage,
-      parts: oldMessage.parts.filter(p => p.id !== data.id),
-    }
-
-    state.messages = [...state.messages.slice(0, msgIndex), newMessage, ...state.messages.slice(msgIndex + 1)]
-    this.syncPersistedMessageCache(data.sessionID, newMessage)
-
-    if (options?.order !== undefined) {
-      options.appliedOrders?.set(data.id, options.order)
-    }
-
-    return true
-  }
-
-  private flushPendingPartEvents(sessionId: string, messageId: string, appliedOrders?: Map<string, number>): boolean {
-    const key = this.makeMessageKey(sessionId, messageId)
-    const pending = this.pendingPartEvents.get(key)
-    if (!pending?.length) return false
-
-    this.pendingPartEvents.delete(key)
-
-    const latestAppliedOrders = appliedOrders ? new Map(appliedOrders) : new Map<string, number>()
-    const remaining: PendingPartEvent[] = []
-    let didApply = false
-
-    for (const event of pending) {
-      const partId = this.getPendingEventPartId(event)
-      const latestAppliedOrder = latestAppliedOrders.get(partId)
-
-      if (latestAppliedOrder !== undefined && event.order < latestAppliedOrder) {
-        continue
-      }
-
-      let applied = false
-
-      switch (event.kind) {
-        case 'updated':
-          applied = this.applyPartUpdated(event.data, {
-            order: event.order,
-            appliedOrders: latestAppliedOrders,
-          })
-          break
-        case 'delta':
-          applied = this.applyPartDelta(event.data, {
-            order: event.order,
-            appliedOrders: latestAppliedOrders,
-          })
-          break
-        case 'removed':
-          applied = this.applyPartRemoved(event.data, {
-            order: event.order,
-            appliedOrders: latestAppliedOrders,
-          })
-          break
-      }
-
-      if (applied) {
-        didApply = true
-      } else {
-        remaining.push(event)
-      }
-    }
-
-    const filteredRemaining = remaining.filter(event => {
-      const latestAppliedOrder = latestAppliedOrders.get(this.getPendingEventPartId(event))
-      return latestAppliedOrder === undefined || event.order > latestAppliedOrder
-    })
-
-    if (filteredRemaining.length > 0) {
-      this.pendingPartEvents.set(key, filteredRemaining)
-    }
-
-    return didApply
-  }
-
-  /**
-   * 处理消息创建/更新事件
-   */
   handleMessageUpdated(apiMsg: ApiMessage) {
-    // 确保 session 存在
     const state = this.ensureSession(apiMsg.sessionID)
-
     const existingIndex = state.messages.findIndex(m => m.info.id === apiMsg.id)
 
     if (existingIndex >= 0) {
-      // 更新现有消息的 info (Immutable update)
       const oldMessage = state.messages[existingIndex]
       const newMessage = { ...oldMessage, info: apiMsg as MessageInfo }
-
       state.messages = [
         ...state.messages.slice(0, existingIndex),
         newMessage,
         ...state.messages.slice(existingIndex + 1),
       ]
     } else {
-      // 创建新消息
       const newMsg: Message = {
         info: apiMsg as MessageInfo,
         parts: [],
         isStreaming: apiMsg.role === 'assistant',
       }
-      // Immutable push
       state.messages = [...state.messages, newMsg]
-
-      // 新的 assistant 消息表示开始 streaming
       if (apiMsg.role === 'assistant') {
         state.isStreaming = true
       }
-
-      this.trimMessagesIfNeeded(apiMsg.sessionID, state)
     }
-
-    // 尝试持久化 parts（适用于大消息）
-    const targetIndex = existingIndex >= 0 ? existingIndex : state.messages.length - 1
-    const targetMessage = state.messages[targetIndex]
-    if (targetMessage) {
-      void this.persistMessagePartsIfNeeded(apiMsg.sessionID, targetMessage)
-    }
-
-    if (targetMessage && targetMessage.parts.length > 0) {
-      this.markMessageHydrated(apiMsg.sessionID, targetMessage.info.id)
-    }
-
-    this.flushPendingPartEvents(apiMsg.sessionID, apiMsg.id)
 
     this.notify()
   }
 
-  /**
-   * 处理 Part 更新事件
-   * 支持流式追加和状态合并
-   */
   handlePartUpdated(apiPart: ApiPart & { sessionID: string; messageID: string }) {
-    this.ensureSession(apiPart.sessionID)
+    const state = this.sessions.get(apiPart.sessionID)
+    if (!state) return
 
-    const order = this.nextPendingPartOrder()
-    const appliedOrders = new Map<string, number>()
-    const applied = this.applyPartUpdated(apiPart, { order, appliedOrders })
+    const msgIndex = state.messages.findIndex(m => m.info.id === apiPart.messageID)
+    if (msgIndex === -1) return
 
-    if (!applied) {
-      this.enqueuePendingPartEvent(apiPart.sessionID, apiPart.messageID, {
-        kind: 'updated',
-        order,
-        data: apiPart,
-      })
+    const oldMessage = state.messages[msgIndex]
+    const newParts = [...oldMessage.parts]
+    const existingPartIndex = newParts.findIndex(p => p.id === apiPart.id)
 
-      return
+    if (existingPartIndex >= 0) {
+      newParts[existingPartIndex] = apiPart as Part
+    } else {
+      newParts.push(apiPart as Part)
     }
 
-    this.flushPendingPartEvents(apiPart.sessionID, apiPart.messageID, appliedOrders)
-
+    const newMessage = { ...oldMessage, parts: newParts }
+    state.messages = [...state.messages.slice(0, msgIndex), newMessage, ...state.messages.slice(msgIndex + 1)]
     this.notify()
   }
 
-  /**
-   * 处理 Part 增量更新事件 (message.part.delta)
-   * 将 delta 文本拼接到已有 part 上，实现实时流式显示
-   */
   handlePartDelta(data: { sessionID: string; messageID: string; partID: string; field: string; delta: string }) {
-    const order = this.nextPendingPartOrder()
-    const applied = this.applyPartDelta(data, { order })
+    const state = this.sessions.get(data.sessionID)
+    if (!state) return
 
-    if (!applied) {
-      this.enqueuePendingPartEvent(data.sessionID, data.messageID, {
-        kind: 'delta',
-        order,
-        data,
-      })
-      return
-    }
+    const msg = state.messages.find(m => m.info.id === data.messageID)
+    if (!msg) return
 
+    const part = msg.parts.find(p => p.id === data.partID)
+    if (!part) return
+
+    if (!(data.field === 'text' && 'text' in part))
+      return // Mutable 修改：直接拼接 text，不做不可变拷贝。
+      // 一帧内可能收到多个 delta，只有最后的状态会被 React 看到。
+      // flushDirtyMessages() 会在 notify 的 rAF 回调中统一生成新引用。
+    ;(part as { text: string }).text += data.delta
+
+    this.dirtyMessages.add(data.messageID)
+    this.dirtySessionId = data.sessionID
     this.notify()
   }
 
-  /**
-   * 处理 Part 移除事件
-   */
   handlePartRemoved(data: { id: string; messageID: string; sessionID: string }) {
-    const order = this.nextPendingPartOrder()
-    const appliedOrders = new Map<string, number>()
-    const applied = this.applyPartRemoved(data, { order, appliedOrders })
+    const state = this.sessions.get(data.sessionID)
+    if (!state) return
 
-    if (!applied) {
-      this.enqueuePendingPartEvent(data.sessionID, data.messageID, {
-        kind: 'removed',
-        order,
-        data,
-      })
-      return
-    }
+    const msgIndex = state.messages.findIndex(m => m.info.id === data.messageID)
+    if (msgIndex === -1) return
 
-    this.flushPendingPartEvents(data.sessionID, data.messageID, appliedOrders)
+    const oldMessage = state.messages[msgIndex]
+    if (!oldMessage.parts.some(p => p.id === data.id)) return
 
+    const newMessage = { ...oldMessage, parts: oldMessage.parts.filter(p => p.id !== data.id) }
+    state.messages = [...state.messages.slice(0, msgIndex), newMessage, ...state.messages.slice(msgIndex + 1)]
     this.notify()
   }
 
-  /**
-   * 处理 Session 空闲事件
-   */
   handleSessionIdle(sessionId: string) {
     const state = this.sessions.get(sessionId)
     if (!state) return
 
     state.isStreaming = false
-
-    // Immutable update for messages
-    // 只有当有消息状态改变时才更新引用
     const hasStreamingMessage = state.messages.some(m => m.isStreaming)
     if (hasStreamingMessage) {
       state.messages = state.messages.map(m => (m.isStreaming ? { ...m, isStreaming: false } : m))
     }
-
-    this.trimMessagesIfNeeded(sessionId, state)
-
-    this.scheduleEvictAfterPersist(sessionId, state)
-
     this.notify()
   }
 
-  /**
-   * 处理 Session 错误事件
-   */
   handleSessionError(sessionId: string) {
     const state = this.sessions.get(sessionId)
     if (!state) return
 
     state.isStreaming = false
-
-    // Immutable update for messages
     const hasStreamingMessage = state.messages.some(m => m.isStreaming)
     if (hasStreamingMessage) {
       state.messages = state.messages.map(m => (m.isStreaming ? { ...m, isStreaming: false } : m))
     }
-
-    this.trimMessagesIfNeeded(sessionId, state)
-
-    this.scheduleEvictAfterPersist(sessionId, state)
-
     this.notify()
   }
 
   // ============================================
-  // Undo/Redo (本地操作，不调用 API)
+  // Undo/Redo
   // ============================================
 
-  /**
-   * 截断 Revert 点之后的消息（用于发送新消息时）
-   * 并清除 Revert 状态
-   */
   truncateAfterRevert(sessionId: string) {
     const state = this.sessions.get(sessionId)
     if (!state || !state.revertState) return
 
     const revertIndex = state.messages.findIndex(m => m.info.id === state.revertState!.messageId)
-
     if (revertIndex !== -1) {
-      // 保留 revertIndex 之前的消息（即 0 到 revertIndex-1）
-      // 这里的语义是：revertMessageId 是要被撤销的第一条消息，还是保留的最后一条？
-      // 根据 handleUndo 中的逻辑：revertIndex 是找到的 userMessageId。
-      // Undo 通常意味着撤销这条消息及其之后的所有消息。
-      // 所以我们应该保留 0 到 revertIndex。
-
-      // 等等，handleUndo 逻辑是：
-      // const revertIndex = state.messages.findIndex(m => m.info.id === userMessageId)
-      // revertedUserMessages = state.messages.slice(revertIndex)
-      // 看来 revertIndex 是要被撤销的消息。
-
-      // 所以截断点应该是 revertIndex。
-      const removedMessageIds = state.messages.slice(revertIndex).map(message => message.info.id)
       state.messages = state.messages.slice(0, revertIndex)
-      this.cleanupMessageCacheState(sessionId, removedMessageIds)
     }
-
     state.revertState = null
     this.notify()
   }
@@ -1221,8 +495,11 @@ class MessageStore {
     if (!state?.revertState) return null
 
     return {
-      messages: state.messages.map(message => this.cloneMessage(message)),
-      revertState: this.cloneRevertState(state.revertState),
+      messages: state.messages.map(m => ({ ...m, parts: [...m.parts] })),
+      revertState: {
+        ...state.revertState,
+        history: state.revertState.history.map(item => ({ ...item, attachments: [...item.attachments] })),
+      },
     }
   }
 
@@ -1230,65 +507,48 @@ class MessageStore {
     const state = this.sessions.get(sessionId)
     if (!state) return
 
-    state.messages = snapshot.messages.map(message => this.cloneMessage(message))
-    state.revertState = this.cloneRevertState(snapshot.revertState)
+    state.messages = snapshot.messages.map(m => ({ ...m, parts: [...m.parts] }))
+    state.revertState = snapshot.revertState
+      ? {
+          ...snapshot.revertState,
+          history: snapshot.revertState.history.map(item => ({ ...item, attachments: [...item.attachments] })),
+        }
+      : null
     state.isStreaming = false
-    void this.persistSessionParts(sessionId, state, true)
     this.notify()
   }
 
-  /**
-   * 设置 revert 状态（由外部 API 调用后触发）
-   */
   setRevertState(sessionId: string, revertState: RevertState | null) {
     const state = this.sessions.get(sessionId)
     if (!state) return
-
     state.revertState = revertState
     this.notify()
   }
 
-  /**
-   * 获取当前可以 undo 的最后一条用户消息 ID
-   */
   getLastUserMessageId(): string | null {
     const messages = this.getVisibleMessages()
     for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].info.role === 'user') {
-        return messages[i].info.id
-      }
+      if (messages[i].info.role === 'user') return messages[i].info.id
     }
     return null
   }
 
-  /**
-   * 检查是否可以 undo
-   */
   canUndo(): boolean {
     const state = this.getCurrentSessionState()
     if (!state || state.isStreaming) return false
     return state.messages.some(m => m.info.role === 'user')
   }
 
-  /**
-   * 检查是否可以 redo
-   */
   canRedo(): boolean {
     const state = this.getCurrentSessionState()
     if (!state || state.isStreaming) return false
     return (state.revertState?.history.length ?? 0) > 0
   }
 
-  /**
-   * 获取 redo 步数
-   */
   getRedoSteps(): number {
     return this.getCurrentSessionState()?.revertState?.history.length ?? 0
   }
 
-  /**
-   * 获取当前 reverted 的消息内容（用于输入框回填）
-   */
   getCurrentRevertedContent(): RevertHistoryItem | null {
     const revertState = this.getRevertState()
     if (!revertState || revertState.history.length === 0) return null
@@ -1302,13 +562,28 @@ class MessageStore {
   setStreaming(sessionId: string, isStreaming: boolean) {
     const state = this.sessions.get(sessionId)
     if (!state) return
-
     state.isStreaming = isStreaming
-    if (!isStreaming) {
-      this.trimMessagesIfNeeded(sessionId, state)
-      this.scheduleEvictAfterPersist(sessionId, state)
-    }
     this.notify()
+  }
+
+  // ============================================
+  // Legacy API stubs (no-op, kept for compat)
+  // ============================================
+
+  /** @deprecated No-op. Parts are always in memory now. */
+  async hydrateMessageParts(_sessionId: string, _messageId: string): Promise<boolean> {
+    return true
+  }
+
+  /** @deprecated No-op. */
+  async prefetchMessageParts(_sessionId: string, _messageIds: string[]): Promise<void> {}
+
+  /** @deprecated No-op. */
+  evictMessageParts(_sessionId: string, _keepMessageIds: string[]): void {}
+
+  /** @deprecated Always returns empty set. */
+  getHydratedMessageIds(): Set<string> {
+    return new Set()
   }
 
   // ============================================
@@ -1337,7 +612,6 @@ class MessageStore {
       if (part.type === 'file') {
         const fp = part as FilePart
         const isFolder = fp.mime === 'application/x-directory'
-        // 获取路径：FileSource 和 SymbolSource 有 path，ResourceSource 有 uri
         const sourcePath =
           fp.source && 'path' in fp.source
             ? fp.source.path
@@ -1381,211 +655,4 @@ class MessageStore {
   }
 }
 
-// ============================================
-// Singleton Export
-// ============================================
-
 export const messageStore = new MessageStore()
-
-// ============================================
-// Snapshot Cache (避免 useSyncExternalStore 无限循环)
-// ============================================
-
-export interface MessageStoreSnapshot {
-  sessionId: string | null
-  messages: Message[]
-  isStreaming: boolean
-  revertState: RevertState | null
-  prependedCount: number
-  hasMoreHistory: boolean
-  sessionDirectory: string
-  shareUrl: string | undefined
-  canUndo: boolean
-  canRedo: boolean
-  redoSteps: number
-  revertedContent: RevertHistoryItem | null
-  loadState: SessionState['loadState']
-}
-
-interface SessionStateSnapshot {
-  messages: Message[]
-  isStreaming: boolean
-  loadState: SessionState['loadState']
-  revertState: RevertState | null
-  canUndo: boolean
-}
-
-let cachedSnapshot: MessageStoreSnapshot | null = null
-
-function createSnapshot(): MessageStoreSnapshot {
-  return {
-    sessionId: messageStore.getCurrentSessionId(),
-    messages: messageStore.getVisibleMessages(),
-    isStreaming: messageStore.getIsStreaming(),
-    revertState: messageStore.getRevertState(),
-    prependedCount: messageStore.getPrependedCount(),
-    hasMoreHistory: messageStore.getHasMoreHistory(),
-    sessionDirectory: messageStore.getSessionDirectory(),
-    shareUrl: messageStore.getShareUrl(),
-    canUndo: messageStore.canUndo(),
-    canRedo: messageStore.canRedo(),
-    redoSteps: messageStore.getRedoSteps(),
-    revertedContent: messageStore.getCurrentRevertedContent(),
-    loadState: messageStore.getLoadState(),
-  }
-}
-
-function getSnapshot(): MessageStoreSnapshot {
-  // 只有在 store 变化时才创建新 snapshot
-  if (cachedSnapshot === null) {
-    cachedSnapshot = createSnapshot()
-  }
-  return cachedSnapshot
-}
-
-// 订阅 store 变化，清除缓存
-messageStore.subscribe(() => {
-  cachedSnapshot = null
-})
-
-// ============================================
-// React Hook
-// ============================================
-
-import { useSyncExternalStore, useRef, useCallback } from 'react'
-
-/**
- * React hook to subscribe to message store
- * (Global / Current Session)
- */
-export function useMessageStore(): MessageStoreSnapshot {
-  return useSyncExternalStore(onStoreChange => messageStore.subscribe(onStoreChange), getSnapshot, getSnapshot)
-}
-
-/**
- * 选择器模式 - 只订阅需要的字段，减少不必要的重渲染
- *
- * @example
- * // 只订阅 sessionId 和 isStreaming
- * const { sessionId, isStreaming } = useMessageStoreSelector(
- *   state => ({ sessionId: state.sessionId, isStreaming: state.isStreaming })
- * )
- */
-export function useMessageStoreSelector<T>(
-  selector: (state: MessageStoreSnapshot) => T,
-  equalityFn: (a: T, b: T) => boolean = shallowEqual,
-): T {
-  const prevResultRef = useRef<T | undefined>(undefined)
-
-  const getSelectedSnapshot = useCallback(() => {
-    const fullSnapshot = getSnapshot()
-    const newResult = selector(fullSnapshot)
-
-    // 如果结果相等，返回之前的引用以避免重渲染
-    if (prevResultRef.current !== undefined && equalityFn(prevResultRef.current, newResult)) {
-      return prevResultRef.current
-    }
-
-    prevResultRef.current = newResult
-    return newResult
-  }, [selector, equalityFn])
-
-  return useSyncExternalStore(
-    onStoreChange => messageStore.subscribe(onStoreChange),
-    getSelectedSnapshot,
-    getSelectedSnapshot,
-  )
-}
-
-/**
- * 浅比较两个对象
- */
-function shallowEqual<T>(a: T, b: T): boolean {
-  if (a === b) return true
-  if (typeof a !== 'object' || typeof b !== 'object') return false
-  if (a === null || b === null) return false
-
-  const keysA = Object.keys(a as object)
-  const keysB = Object.keys(b as object)
-
-  if (keysA.length !== keysB.length) return false
-
-  const recordA = a as Record<string, unknown>
-  const recordB = b as Record<string, unknown>
-
-  for (const key of keysA) {
-    if (recordA[key] !== recordB[key]) return false
-  }
-
-  return true
-}
-
-// 缓存：sessionId -> Snapshot
-const sessionSnapshots = new Map<string, SessionStateSnapshot>()
-
-// 订阅 store 变化，清除相关缓存
-messageStore.subscribe(() => {
-  sessionSnapshots.clear()
-})
-
-/**
- * React hook to subscribe to a SPECIFIC session state
- */
-export function useSessionState(sessionId: string | null): SessionStateSnapshot | null {
-  const getSnapshot = (): SessionStateSnapshot | null => {
-    if (!sessionId) return null
-
-    // 如果缓存中有，直接返回
-    if (sessionSnapshots.has(sessionId)) {
-      return sessionSnapshots.get(sessionId) ?? null
-    }
-
-    const state = messageStore.getSessionState(sessionId)
-    if (!state) return null
-
-    // 构建 snapshot 并缓存
-    const snapshot = {
-      messages: state.messages,
-      isStreaming: state.isStreaming,
-      loadState: state.loadState,
-      revertState: state.revertState,
-      canUndo: state.messages.some(m => m.info.role === 'user' && !state.isStreaming),
-    }
-
-    sessionSnapshots.set(sessionId, snapshot)
-    return snapshot
-  }
-
-  return useSyncExternalStore(onStoreChange => messageStore.subscribe(onStoreChange), getSnapshot, getSnapshot)
-}
-
-// ============================================
-// 便捷选择器 Hooks
-// ============================================
-
-/** 只订阅 sessionId */
-export function useCurrentSessionId(): string | null {
-  return useMessageStoreSelector(state => state.sessionId)
-}
-
-/** 只订阅 isStreaming */
-export function useIsStreaming(): boolean {
-  return useMessageStoreSelector(state => state.isStreaming)
-}
-
-/** 只订阅 messages */
-export function useMessages(): Message[] {
-  return useMessageStoreSelector(
-    state => state.messages,
-    (a, b) => a === b,
-  )
-}
-
-/** 只订阅 canUndo/canRedo */
-export function useUndoRedoState() {
-  return useMessageStoreSelector(state => ({
-    canUndo: state.canUndo,
-    canRedo: state.canRedo,
-    redoSteps: state.redoSteps,
-  }))
-}

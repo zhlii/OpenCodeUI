@@ -142,7 +142,7 @@ export const ContentBlock = memo(function ContentBlock({
 
   return (
     <div
-      className={`rounded-lg overflow-hidden text-xs ${
+      className={`rounded-lg overflow-hidden text-xs contain-content ${
         isError ? 'border border-danger-100/30 bg-danger-100/5' : 'bg-bg-100/80 border border-border-200/40'
       }`}
     >
@@ -225,14 +225,6 @@ export const ContentBlock = memo(function ContentBlock({
         }`}
       >
         <div className="overflow-hidden">
-          {/* Loading skeleton */}
-          {isLoading && !hasContent && (
-            <div className="px-3 py-3 space-y-2">
-              <div className="h-3 bg-bg-300/40 rounded animate-pulse w-3/4" />
-              <div className="h-3 bg-bg-300/40 rounded animate-pulse w-1/2" />
-            </div>
-          )}
-
           {/* Content */}
           {hasContent && (
             <div ref={contentRef} className="relative group/content">
