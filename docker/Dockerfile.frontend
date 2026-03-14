@@ -41,6 +41,11 @@ COPY --from=builder /app/dist /srv
 COPY docker/Caddyfile /etc/caddy/Caddyfile
 COPY docker/Caddyfile.standalone /etc/caddy/Caddyfile.standalone
 
+# 运行时配置注入
+COPY docker/frontend-entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
+
 EXPOSE 3000
 
+ENTRYPOINT ["/entrypoint.sh"]
 CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile"]

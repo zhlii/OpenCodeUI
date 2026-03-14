@@ -49,6 +49,8 @@ services:
     image: ghcr.io/lehhair/opencodeui-frontend:latest
     container_name: opencode-frontend
     restart: unless-stopped
+    environment:
+      - APP_NAME=${APP_NAME:-}
     networks:
       - opencode-net
 

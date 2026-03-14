@@ -20,6 +20,7 @@ services:
     command: ['caddy', 'run', '--config', '/etc/caddy/Caddyfile.standalone']
     environment:
       - BACKEND_URL=${BACKEND_URL:-host.docker.internal:4096}
+      - APP_NAME=${APP_NAME:-}
     # Linux 需要 host.docker.internal 支持
     extra_hosts:
       - 'host.docker.internal:host-gateway'
