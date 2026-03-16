@@ -1,5 +1,15 @@
 # Changelog
 
+## [v0.2.5] - 2026-03-16
+
+- fix: 修复胶囊按钮和弹窗 header 图标与文字对齐 (a65e34e)
+- fix: 工具 icon 光晕不再被父容器裁切 (c946f19)
+- fix: 移动端设置 tab 选中态被 overflow 裁切 (027fcf9)
+- refactor: 设置界面优化 — 修复双滚动条、服务器编辑/删除确认 (ec75fad)
+- fix(i18n): 保留开发者工具常见英文术语不翻译 (f4a6022)
+- fix(i18n): 修正中文翻译质量 (f2bd269)
+- feat: add full i18n support with react-i18next (en + zh-CN) (bcd9850)
+
 ## [v0.2.4] - 2026-03-16
 
 - fix: 会话级 Full Auto 恢复原有行为 — 只在当前所在页面的 session 生效，切走后不再自动放行 (e98bd4e)
