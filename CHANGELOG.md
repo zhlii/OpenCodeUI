@@ -1,5 +1,17 @@
 # Changelog
 
+## [v0.2.8] - 2026-03-18
+
+- fix: wrap panel tab label case blocks (d353b80)
+- feat: expand right panel resize range (3e67623)
+- feat: add tabbed session changes workspaces (ace0259)
+- feat: add tabbed file preview workspaces (ffad629)
+- fix: stabilize mobile terminal toolbar layout (1eb23b7)
+- feat: refine mobile terminal extra keys behavior (6e04254)
+- feat: add mobile extra keys toolbar for terminal (Termux-style) (2b185ac)
+- feat: show collapsed folder activity status (0bd1378)
+- feat: mark completed sessions as unread in recents (90cf8c3)
+
 ## [v0.2.7] - 2026-03-18
 
 - feat: add markdown reasoning display mode (20fa476)
