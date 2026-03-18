@@ -46,16 +46,18 @@ function getTabLabel(tab: PanelTab, tabs: PanelTab[], t: (key: string) => string
     return tab.title ?? t('terminal.terminal')
   }
   switch (tab.type) {
-    case 'files':
+    case 'files': {
       if (tab.title) return tab.title
       const fileTabs = tabs.filter(item => item.type === 'files')
       if (fileTabs.length <= 1) return t('panelContainer.files')
       return `${t('panelContainer.files')} ${fileTabs.findIndex(item => item.id === tab.id) + 1}`
-    case 'changes':
+    }
+    case 'changes': {
       if (tab.title) return tab.title
       const changesTabs = tabs.filter(item => item.type === 'changes')
       if (changesTabs.length <= 1) return t('panelContainer.changes')
       return `${t('panelContainer.changes')} ${changesTabs.findIndex(item => item.id === tab.id) + 1}`
+    }
     case 'mcp':
       return t('panelContainer.mcp')
     case 'skill':
