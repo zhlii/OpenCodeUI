@@ -53,3 +53,6 @@ export { activeSessionStore, useActiveSessionStore, useBusySessions, useBusyCoun
 export type { ActiveSessionEntry } from './activeSessionStore'
 
 export { serviceStore, useServiceStore } from './serviceStore'
+
+export { soundStore, useSoundSettings } from './soundStore'
+export type { SoundSettings, EventSoundConfig } from './soundStore'

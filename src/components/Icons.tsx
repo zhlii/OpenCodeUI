@@ -81,6 +81,12 @@ import {
   Minus,
   Paperclip,
   FastForward,
+  Volume2,
+  VolumeX,
+  Play,
+  Upload,
+  Shield,
+  TriangleAlert,
 } from 'lucide-react'
 
 export interface IconProps extends SVGProps<SVGSVGElement> {
@@ -201,3 +207,9 @@ export const LayersIcon = wrap(Layers)
 export const MinusIcon = wrap(Minus)
 export const PaperclipIcon = wrap(Paperclip)
 export const FastForwardIcon = wrap(FastForward)
+export const VolumeIcon = wrap(Volume2)
+export const VolumeOffIcon = wrap(VolumeX)
+export const PlayIcon = wrap(Play)
+export const UploadIcon = wrap(Upload)
+export const ShieldIcon = wrap(Shield)
+export const WarningIcon = wrap(TriangleAlert)

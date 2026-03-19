@@ -24,6 +24,7 @@ import { keybindingStore } from './store/keybindingStore'
 import { layoutStore } from './store/layoutStore'
 import { uiErrorHandler } from './utils'
 import { restoreModelSelection } from './utils/sessionHelpers'
+import { initNotificationSound } from './utils/notificationSoundBridge'
 import { findModelByKey } from './utils/modelUtils'
 import type { Attachment } from './api'
 import { createPtySession } from './api/pty'
@@ -42,6 +43,14 @@ const CloseServiceDialog = lazy(() =>
 
 function App() {
   const { t } = useTranslation(['commands', 'chat', 'common', 'components'])
+
+  // ============================================
+  // 初始化通知声音系统
+  // ============================================
+  useEffect(() => {
+    const cleanup = initNotificationSound()
+    return cleanup
+  }, [])
 
   // ============================================
   // Refs

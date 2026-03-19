@@ -16,6 +16,9 @@ import { useSyncExternalStore } from 'react'
 
 export type NotificationType = 'permission' | 'question' | 'completed' | 'error'
 
+/** push 后的回调，用于声音播放等扩展 */
+export type NotificationPushListener = (type: NotificationType) => void
+
 export interface NotificationEntry {
   id: string
   type: NotificationType
@@ -83,6 +86,7 @@ class NotificationStore {
   }
   private subscribers = new Set<Subscriber>()
   private toastTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private pushListeners = new Set<NotificationPushListener>()
 
   /** toast 弹窗总开关 */
   toastEnabled: boolean = (() => {
@@ -117,6 +121,12 @@ class NotificationStore {
     }
     // 关闭时清掉当前所有 toast
     if (!enabled) this.dismissAllToasts()
+  }
+
+  /** 注册 push 后回调（声音播放等） */
+  onPush(listener: NotificationPushListener): () => void {
+    this.pushListeners.add(listener)
+    return () => this.pushListeners.delete(listener)
   }
 
   // ============================================
@@ -155,6 +165,15 @@ class NotificationStore {
       this.persist()
       this.notify()
     }
+
+    // 触发 push 后回调（声音播放等）
+    this.pushListeners.forEach(fn => {
+      try {
+        fn(type)
+      } catch {
+        // 回调异常不影响通知流程
+      }
+    })
   }
 
   // ============================================
