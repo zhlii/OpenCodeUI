@@ -13,6 +13,7 @@ import { memo, useMemo, useRef, useState, useEffect, useCallback, useSyncExterna
 import { useTranslation } from 'react-i18next'
 import { diffLines, diffWords } from 'diff'
 import { useSyntaxHighlight, type HighlightTokens } from '../hooks/useSyntaxHighlight'
+import { useDynamicVirtualScroll } from '../hooks/useDynamicVirtualScroll'
 import { themeStore } from '../store/themeStore'
 import type { DiffStyle } from '../store/themeStore'
 
@@ -350,6 +351,9 @@ const WrappedSplitDiffView = memo(function WrappedSplitDiffView({
     })
   }, [])
 
+  const { containerRef, totalHeight, startIndex, endIndex, offsetY, handleScroll, measureRef } =
+    useDynamicVirtualScroll({ lineCount: displayLines.length, isResizing })
+
   if (pairedLines.length === 0) {
     return (
       <div className="h-full flex items-center justify-center text-text-400 text-sm">{t('diffViewer.noChanges')}</div>
@@ -358,82 +362,100 @@ const WrappedSplitDiffView = memo(function WrappedSplitDiffView({
 
   const useChangeBars = diffStyle === 'changeBars'
   const gutterWidth = useChangeBars ? 35 : 52
+
+  const visibleRows: React.ReactNode[] = []
+  for (let i = startIndex; i < endIndex; i++) {
+    const item = displayLines[i]
+
+    if (isCollapsed(item)) {
+      visibleRows.push(
+        <div key={`c-${i}`} ref={el => measureRef(i, el)}>
+          <CollapsedBar count={item.count} t={t} onExpand={() => handleExpand(item.id)} />
+        </div>,
+      )
+      continue
+    }
+
+    const pair = item as PairedLine
+    visibleRows.push(
+      <div key={i} ref={el => measureRef(i, el)} className="flex items-stretch">
+        {/* Left panel */}
+        <div
+          className={`flex-1 flex items-stretch min-w-0 border-r border-border-100/30 ${getLineBgClass(pair.left.type)}`}
+        >
+          <div className={`shrink-0 ${getGutterBgClass(pair.left.type)}`} style={{ width: gutterWidth }}>
+            {useChangeBars ? (
+              <div className="flex items-stretch h-full">
+                <div {...getChangeBarProps(pair.left.type)} />
+                <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
+                  {pair.left.lineNo}
+                </div>
+              </div>
+            ) : (
+              <div className="flex h-full">
+                <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
+                  {pair.left.lineNo}
+                </div>
+                <div className="w-5 shrink-0 text-center text-[11px] leading-5 select-none">
+                  {pair.left.type === 'delete' && <span className="text-danger-100">−</span>}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div
+            className="min-w-0 flex-1 px-2 leading-5 text-[11px] whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
+            style={{ minHeight: LINE_HEIGHT }}
+          >
+            {pair.left.type !== 'empty' && <LineContent line={pair.left} tokens={beforeTokens} />}
+          </div>
+        </div>
+
+        {/* Right panel */}
+        <div className={`flex-1 flex items-stretch min-w-0 ${getLineBgClass(pair.right.type)}`}>
+          <div className={`shrink-0 ${getGutterBgClass(pair.right.type)}`} style={{ width: gutterWidth }}>
+            {useChangeBars ? (
+              <div className="flex items-stretch h-full">
+                <div {...getChangeBarProps(pair.right.type)} />
+                <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
+                  {pair.right.lineNo}
+                </div>
+              </div>
+            ) : (
+              <div className="flex h-full">
+                <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
+                  {pair.right.lineNo}
+                </div>
+                <div className="w-5 shrink-0 text-center text-[11px] leading-5 select-none">
+                  {pair.right.type === 'add' && <span className="text-success-100">+</span>}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div
+            className="min-w-0 flex-1 px-2 leading-5 text-[11px] whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
+            style={{ minHeight: LINE_HEIGHT }}
+          >
+            {pair.right.type !== 'empty' && <LineContent line={pair.right} tokens={afterTokens} />}
+          </div>
+        </div>
+      </div>,
+    )
+  }
+
   return (
     <div
+      ref={containerRef}
       className="overflow-y-auto overflow-x-hidden custom-scrollbar font-mono h-full"
+      onScroll={handleScroll}
       style={maxHeight !== undefined ? { maxHeight } : undefined}
     >
-      {displayLines.map((item, i) => {
-        if (isCollapsed(item)) {
-          return <CollapsedBar key={`c-${i}`} count={item.count} t={t} onExpand={() => handleExpand(item.id)} />
-        }
-        const pair = item as PairedLine
-        return (
-          <div key={i} className="flex items-stretch [content-visibility:auto] [contain-intrinsic-size:20px]">
-            {/* Left panel */}
-            <div
-              className={`flex-1 flex items-stretch min-w-0 border-r border-border-100/30 ${getLineBgClass(pair.left.type)}`}
-            >
-              <div className={`shrink-0 ${getGutterBgClass(pair.left.type)}`} style={{ width: gutterWidth }}>
-                {useChangeBars ? (
-                  <div className="flex items-stretch h-full">
-                    <div {...getChangeBarProps(pair.left.type)} />
-                    <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
-                      {pair.left.lineNo}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex h-full">
-                    <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
-                      {pair.left.lineNo}
-                    </div>
-                    <div className="w-5 shrink-0 text-center text-[11px] leading-5 select-none">
-                      {pair.left.type === 'delete' && <span className="text-danger-100">−</span>}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div
-                className="min-w-0 flex-1 px-2 leading-5 text-[11px] whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
-                style={{ minHeight: LINE_HEIGHT }}
-              >
-                {pair.left.type !== 'empty' && <LineContent line={pair.left} tokens={beforeTokens} />}
-              </div>
-            </div>
-
-            {/* Right panel */}
-            <div className={`flex-1 flex items-stretch min-w-0 ${getLineBgClass(pair.right.type)}`}>
-              <div className={`shrink-0 ${getGutterBgClass(pair.right.type)}`} style={{ width: gutterWidth }}>
-                {useChangeBars ? (
-                  <div className="flex items-stretch h-full">
-                    <div {...getChangeBarProps(pair.right.type)} />
-                    <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
-                      {pair.right.lineNo}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex h-full">
-                    <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
-                      {pair.right.lineNo}
-                    </div>
-                    <div className="w-5 shrink-0 text-center text-[11px] leading-5 select-none">
-                      {pair.right.type === 'add' && <span className="text-success-100">+</span>}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              <div
-                className="min-w-0 flex-1 px-2 leading-5 text-[11px] whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
-                style={{ minHeight: LINE_HEIGHT }}
-              >
-                {pair.right.type !== 'empty' && <LineContent line={pair.right} tokens={afterTokens} />}
-              </div>
-            </div>
-          </div>
-        )
-      })}
+      <div style={{ height: totalHeight, position: 'relative' }}>
+        <div className="absolute top-0 left-0 right-0" style={{ transform: `translateY(${offsetY}px)` }}>
+          {visibleRows}
+        </div>
+      </div>
     </div>
   )
 })
@@ -1107,6 +1129,9 @@ const WrappedUnifiedDiffView = memo(function WrappedUnifiedDiffView({
     })
   }, [])
 
+  const { containerRef, totalHeight, startIndex, endIndex, offsetY, handleScroll, measureRef } =
+    useDynamicVirtualScroll({ lineCount: displayLines.length, isResizing })
+
   if (lines.length === 0) {
     return (
       <div className="h-full flex items-center justify-center text-text-400 text-sm">{t('diffViewer.noChanges')}</div>
@@ -1115,68 +1140,83 @@ const WrappedUnifiedDiffView = memo(function WrappedUnifiedDiffView({
 
   const useChangeBars = diffStyle === 'changeBars'
   const gutterWidth = useChangeBars ? 67 : 84
+
+  const visibleRows: React.ReactNode[] = []
+  for (let i = startIndex; i < endIndex; i++) {
+    const item = displayLines[i]
+
+    if (isCollapsed(item)) {
+      visibleRows.push(
+        <div key={`c-${i}`} ref={el => measureRef(i, el)}>
+          <CollapsedBar count={item.count} t={t} onExpand={() => handleExpand(item.id)} />
+        </div>,
+      )
+      continue
+    }
+
+    const line = item as UnifiedLine
+    let tokens: HighlightTokens | null = null
+    let lineNo: number | undefined
+
+    if (line.type === 'delete' && line.oldLineNo) {
+      tokens = beforeTokens
+      lineNo = line.oldLineNo
+    } else if ((line.type === 'add' || line.type === 'context') && line.newLineNo) {
+      tokens = afterTokens
+      lineNo = line.newLineNo
+    }
+
+    visibleRows.push(
+      <div key={i} ref={el => measureRef(i, el)} className={`flex items-stretch ${getLineBgClass(line.type)}`}>
+        <div className={`shrink-0 ${getGutterBgClass(line.type)}`} style={{ width: gutterWidth }}>
+          {useChangeBars ? (
+            <div className="flex items-stretch h-full">
+              <div {...getChangeBarProps(line.type)} />
+              <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
+                {line.oldLineNo}
+              </div>
+              <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
+                {line.newLineNo}
+              </div>
+            </div>
+          ) : (
+            <div className="flex h-full">
+              <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
+                {line.oldLineNo}
+              </div>
+              <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
+                {line.newLineNo}
+              </div>
+              <div className="w-5 shrink-0 text-center text-[11px] leading-5 select-none">
+                {line.type === 'add' && <span className="text-success-100">+</span>}
+                {line.type === 'delete' && <span className="text-danger-100">−</span>}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div
+          className="min-w-0 flex-1 px-2 leading-5 text-[11px] whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
+          style={{ minHeight: LINE_HEIGHT }}
+        >
+          <LineContent line={{ ...line, lineNo }} tokens={tokens} />
+        </div>
+      </div>,
+    )
+  }
+
   return (
     <div
+      ref={containerRef}
       className="overflow-y-auto overflow-x-hidden custom-scrollbar font-mono h-full"
+      onScroll={handleScroll}
       style={maxHeight !== undefined ? { maxHeight } : undefined}
     >
-      {displayLines.map((item, i) => {
-        if (isCollapsed(item)) {
-          return <CollapsedBar key={`c-${i}`} count={item.count} t={t} onExpand={() => handleExpand(item.id)} />
-        }
-        const line = item as UnifiedLine
-        let tokens: HighlightTokens | null = null
-        let lineNo: number | undefined
-
-        if (line.type === 'delete' && line.oldLineNo) {
-          tokens = beforeTokens
-          lineNo = line.oldLineNo
-        } else if ((line.type === 'add' || line.type === 'context') && line.newLineNo) {
-          tokens = afterTokens
-          lineNo = line.newLineNo
-        }
-
-        return (
-          <div
-            key={i}
-            className={`flex items-stretch [content-visibility:auto] [contain-intrinsic-size:20px] ${getLineBgClass(line.type)}`}
-          >
-            <div className={`shrink-0 ${getGutterBgClass(line.type)}`} style={{ width: gutterWidth }}>
-              {useChangeBars ? (
-                <div className="flex items-stretch h-full">
-                  <div {...getChangeBarProps(line.type)} />
-                  <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
-                    {line.oldLineNo}
-                  </div>
-                  <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
-                    {line.newLineNo}
-                  </div>
-                </div>
-              ) : (
-                <div className="flex h-full">
-                  <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
-                    {line.oldLineNo}
-                  </div>
-                  <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
-                    {line.newLineNo}
-                  </div>
-                  <div className="w-5 shrink-0 text-center text-[11px] leading-5 select-none">
-                    {line.type === 'add' && <span className="text-success-100">+</span>}
-                    {line.type === 'delete' && <span className="text-danger-100">−</span>}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div
-              className="min-w-0 flex-1 px-2 leading-5 text-[11px] whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
-              style={{ minHeight: LINE_HEIGHT }}
-            >
-              <LineContent line={{ ...line, lineNo }} tokens={tokens} />
-            </div>
-          </div>
-        )
-      })}
+      <div style={{ height: totalHeight, position: 'relative' }}>
+        <div className="absolute top-0 left-0 right-0" style={{ transform: `translateY(${offsetY}px)` }}>
+          {visibleRows}
+        </div>
+      </div>
     </div>
   )
 })

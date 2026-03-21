@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useSyntaxHighlightRef, type HighlightTokens } from '../hooks/useSyntaxHighlight'
+import { useDynamicVirtualScroll } from '../hooks/useDynamicVirtualScroll'
 import { themeStore } from '../store/themeStore'
 
 const LINE_HEIGHT = 20
@@ -257,10 +258,14 @@ function WrappedCodePreview({ code, language, truncateLines = true, maxHeight, i
     enabled: enableHighlight,
   })
 
+  const { containerRef, totalHeight, startIndex, endIndex, offsetY, handleScroll, measureRef } =
+    useDynamicVirtualScroll({ lineCount: lines.length, isResizing })
+
   const tokens = tokensRef.current
-  const rows = useMemo(() => {
-    return lines.map((rawLine, i) => {
-      const lineText = rawLine || ' '
+  const visibleRows = useMemo(() => {
+    const rows: React.ReactNode[] = []
+    for (let i = startIndex; i < endIndex; i++) {
+      const rawLine = lines[i] || ' '
       const lineTokens = tokens?.[i]
 
       let displayContent: React.ReactNode
@@ -282,11 +287,11 @@ function WrappedCodePreview({ code, language, truncateLines = true, maxHeight, i
         isTruncated = true
         displayContent = <span className="text-text-200">{rawLine.slice(0, MAX_LINE_LENGTH)}</span>
       } else {
-        displayContent = <span className="text-text-200">{lineText}</span>
+        displayContent = <span className="text-text-200">{rawLine}</span>
       }
 
-      return (
-        <div key={i} className="flex [content-visibility:auto] [contain-intrinsic-size:20px]">
+      rows.push(
+        <div key={i} ref={el => measureRef(i, el)} className="flex">
           <div
             className="shrink-0 text-text-500 text-right pr-3 pl-4 leading-5 select-none"
             style={{ width: gutterWidth, minHeight: LINE_HEIGHT }}
@@ -300,17 +305,24 @@ function WrappedCodePreview({ code, language, truncateLines = true, maxHeight, i
             {displayContent}
             {isTruncated && <span className="text-text-500 ml-1">{t('common:truncated')}</span>}
           </div>
-        </div>
+        </div>,
       )
-    })
-  }, [gutterWidth, lines, t, tokens, truncateLines, version])
+    }
+    return rows
+  }, [startIndex, endIndex, lines, tokens, version, truncateLines, t, gutterWidth, measureRef])
 
   return (
     <div
+      ref={containerRef}
       className="overflow-y-auto overflow-x-hidden code-scrollbar h-full font-mono text-[11px] leading-relaxed"
+      onScroll={handleScroll}
       style={maxHeight !== undefined ? { maxHeight } : undefined}
     >
-      {rows}
+      <div style={{ height: totalHeight, position: 'relative' }}>
+        <div className="absolute top-0 left-0 right-0" style={{ transform: `translateY(${offsetY}px)` }}>
+          {visibleRows}
+        </div>
+      </div>
     </div>
   )
 }
