@@ -1,5 +1,6 @@
 import { memo, useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { diffLines } from 'diff'
 import { ChevronDownIcon, ChevronRightIcon } from '../../../components/Icons'
 import type { ToolPart } from '../../../types/message'
 import { useDelayedRender } from '../../../hooks'
@@ -123,8 +124,9 @@ export const ToolPartView = memo(function ToolPartView({
   if (descriptive) {
     const data = extractToolData(part)
     const exitCode = data.exitCode
-    const diffStats = data.diffStats
     const hasDiffFiles = !!data.files?.length
+    // diffStats 可能从 metadata 来，也可能需要从 diff 数据计算
+    const diffStats = data.diffStats || computeDiffStatsFromData(data)
 
     return (
       <div className="group py-0.5">
@@ -357,6 +359,47 @@ const READABLE_TOOL_PATTERNS = /bash|sh|cmd|terminal|shell|write|save|edit|repla
 
 function isReadableTool(toolName: string): boolean {
   return READABLE_TOOL_PATTERNS.test(toolName.toLowerCase())
+}
+
+/** 从 diff 数据计算 diffStats（当 metadata 没给 diffStats 时用） */
+function computeDiffStatsFromData(data: {
+  diff?: { before: string; after: string } | string
+  files?: Array<{ before?: string; after?: string; additions?: number; deletions?: number }>
+}): { additions: number; deletions: number } | undefined {
+  // 多文件
+  if (data.files?.length) {
+    let additions = 0,
+      deletions = 0
+    for (const f of data.files) {
+      if (f.additions !== undefined) additions += f.additions
+      if (f.deletions !== undefined) deletions += f.deletions
+      if (f.additions === undefined && f.before !== undefined && f.after !== undefined) {
+        const s = computeDiffPair(f.before, f.after)
+        additions += s.additions
+        deletions += s.deletions
+      }
+    }
+    return additions || deletions ? { additions, deletions } : undefined
+  }
+
+  // 单个 diff
+  if (data.diff && typeof data.diff === 'object') {
+    const s = computeDiffPair(data.diff.before, data.diff.after)
+    return s.additions || s.deletions ? s : undefined
+  }
+
+  return undefined
+}
+
+function computeDiffPair(before: string, after: string): { additions: number; deletions: number } {
+  const changes = diffLines(before, after)
+  let additions = 0,
+    deletions = 0
+  for (const c of changes) {
+    if (c.added) additions += c.count || 0
+    if (c.removed) deletions += c.count || 0
+  }
+  return { additions, deletions }
 }
 
 // ============================================

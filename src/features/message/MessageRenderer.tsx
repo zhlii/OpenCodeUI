@@ -1,5 +1,6 @@
 import { memo, useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
+import { diffLines } from 'diff'
 import { animate } from 'motion/mini'
 import { ChevronDownIcon, ChevronRightIcon, SplitIcon, SpinnerIcon, UndoIcon } from '../../components/Icons'
 import { CopyButton, SmoothHeight } from '../../components/ui'
@@ -23,6 +24,7 @@ import {
   CompactionPartView,
   MessageErrorView,
 } from './parts'
+import { extractToolData } from './tools'
 import type {
   Message,
   Part,
@@ -514,6 +516,22 @@ const ToolGroup = memo(function ToolGroup({ parts, stepFinish, duration, turnDur
   const hasErroredTools = parts.some(part => part.state.status === 'error')
   const stepsSummary = descriptiveToolSteps ? buildDescriptiveToolStepsSummary(parts, t) : undefined
 
+  // 汇总所有工具的 diff stats
+  const totalDiffStats = useMemo(() => {
+    if (!descriptiveToolSteps) return undefined
+    let additions = 0,
+      deletions = 0
+    for (const part of parts) {
+      const data = extractToolData(part)
+      const stats = data.diffStats || computePartDiffStats(data)
+      if (stats) {
+        additions += stats.additions
+        deletions += stats.deletions
+      }
+    }
+    return additions || deletions ? { additions, deletions } : undefined
+  }, [descriptiveToolSteps, parts])
+
   // 沉浸模式下：判断工具组是否包含需要用户阅读的工具
   const hasReadableTools = immersiveMode && parts.some(p => isReadableTool(p.tool))
 
@@ -553,15 +571,23 @@ const ToolGroup = memo(function ToolGroup({ parts, stepFinish, duration, turnDur
             <button
               type="button"
               onClick={() => setExpanded(!expanded)}
-              className="flex w-full items-start rounded-md py-1 text-left hover:bg-bg-200/30 transition-colors"
+              className="flex w-full items-baseline rounded-md py-1 text-left hover:bg-bg-200/30 transition-colors"
             >
               <span
-                className={`min-w-0 flex-1 text-[12px] leading-5 ${
+                className={`text-[12px] leading-5 ${
                   hasActiveTools ? 'reasoning-shimmer-text' : hasErroredTools ? 'text-danger-100' : 'text-text-300'
                 }`}
               >
                 {stepsSummary}
               </span>
+              {totalDiffStats && !hasActiveTools && (
+                <span className="ml-1.5 inline-flex items-center gap-1 text-[10px] font-mono font-medium tabular-nums">
+                  {totalDiffStats.additions > 0 && (
+                    <span className="text-success-100">+{totalDiffStats.additions}</span>
+                  )}
+                  {totalDiffStats.deletions > 0 && <span className="text-danger-100">-{totalDiffStats.deletions}</span>}
+                </span>
+              )}
             </button>
           ) : (
             <button
@@ -771,6 +797,43 @@ function getTaskChildSessionId(part: ToolPart): string | undefined {
   if (part.tool.toLowerCase() !== 'task') return undefined
   const metadata = part.state.metadata as Record<string, unknown> | undefined
   return metadata?.sessionId as string | undefined
+}
+
+/** 从 extractToolData 的结果计算 diff stats（当 metadata 没给 diffStats 时） */
+function computePartDiffStats(data: {
+  diff?: { before: string; after: string } | string
+  files?: Array<{ before?: string; after?: string; additions?: number; deletions?: number }>
+}): { additions: number; deletions: number } | undefined {
+  if (data.files?.length) {
+    let a = 0,
+      d = 0
+    for (const f of data.files) {
+      if (f.additions !== undefined) a += f.additions
+      if (f.deletions !== undefined) d += f.deletions
+      if (f.additions === undefined && f.before !== undefined && f.after !== undefined) {
+        const s = diffPairStats(f.before, f.after)
+        a += s.additions
+        d += s.deletions
+      }
+    }
+    return a || d ? { additions: a, deletions: d } : undefined
+  }
+  if (data.diff && typeof data.diff === 'object') {
+    const s = diffPairStats(data.diff.before, data.diff.after)
+    return s.additions || s.deletions ? s : undefined
+  }
+  return undefined
+}
+
+function diffPairStats(before: string, after: string): { additions: number; deletions: number } {
+  const changes = diffLines(before, after)
+  let additions = 0,
+    deletions = 0
+  for (const c of changes) {
+    if (c.added) additions += c.count || 0
+    if (c.removed) deletions += c.count || 0
+  }
+  return { additions, deletions }
 }
 
 // ============================================
