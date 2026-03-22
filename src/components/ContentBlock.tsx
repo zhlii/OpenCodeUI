@@ -38,6 +38,8 @@ export interface ContentBlockProps {
   maxHeight?: number
   /** 是否可折叠 */
   collapsible?: boolean
+  /** 精简模式：header 和代码行等高（20px），不可折叠 */
+  compact?: boolean
 
   // 内容
   /** 普通文本/代码内容 */
@@ -68,6 +70,7 @@ export const ContentBlock = memo(function ContentBlock({
   defaultCollapsed = false,
   maxHeight: maxHeightProp,
   collapsible = true,
+  compact = false,
   content,
   diff,
   diffStats: providedDiffStats,
@@ -77,7 +80,7 @@ export const ContentBlock = memo(function ContentBlock({
 }: ContentBlockProps) {
   const { t } = useTranslation(['components', 'common'])
   const resolvedLoadingText = loadingText ?? t('common:loading')
-  const [collapsed, setCollapsed] = useState(defaultCollapsed)
+  const [collapsed, setCollapsed] = useState(compact ? false : defaultCollapsed)
   const [fullscreenOpen, setFullscreenOpen] = useState(false)
   const [diffViewMode, setDiffViewMode] = useState<ViewMode>('split')
   const contentRef = useRef<HTMLDivElement>(null)
@@ -87,10 +90,10 @@ export const ContentBlock = memo(function ContentBlock({
 
   const isError = variant === 'error'
   const isInline = variant === 'inline'
-  const maxHeight = maxHeightProp ?? responsiveMaxHeight
+  const maxHeight = compact ? undefined : (maxHeightProp ?? responsiveMaxHeight)
   const isDiff = !!diff
   const hasContent = !!content?.trim() || isDiff || stats?.exit !== undefined
-  const canCollapse = collapsible && hasContent && !isInline
+  const canCollapse = !compact && collapsible && hasContent && !isInline
   const lang = language || (filePath ? detectLanguage(filePath) : 'text')
   const fileName = filePath?.split(/[/\\]/).pop()
 
@@ -213,7 +216,7 @@ export const ContentBlock = memo(function ContentBlock({
           )}
 
           {/* Fullscreen button - 支持 diff 和代码 */}
-          {(isDiff || content?.trim()) && !collapsed && (
+          {!compact && (isDiff || content?.trim()) && !collapsed && (
             <button
               className="p-0.5 text-text-400 hover:text-text-200 rounded transition-colors"
               onClick={e => {

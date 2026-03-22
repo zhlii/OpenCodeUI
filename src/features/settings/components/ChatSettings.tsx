@@ -11,10 +11,11 @@ import {
   FolderIcon,
   PermissionListIcon,
   SplitIcon,
+  LayersIcon,
 } from '../../../components/Icons'
 import { usePathMode, useIsMobile } from '../../../hooks'
 import { autoApproveStore, layoutStore, useLayoutStore } from '../../../store'
-import { themeStore, type ReasoningDisplayMode } from '../../../store/themeStore'
+import { themeStore, type ReasoningDisplayMode, type ToolCardStyle } from '../../../store/themeStore'
 import { Toggle, SegmentedControl, SettingRow, SettingsCard } from './SettingsUI'
 import type { PathMode } from '../../../utils/directoryUtils'
 
@@ -28,6 +29,7 @@ export function ChatSettings() {
   const [reasoningDisplayMode, setReasoningDisplayMode] = useState(themeStore.reasoningDisplayMode)
   const [descriptiveToolSteps, setDescriptiveToolSteps] = useState(themeStore.descriptiveToolSteps)
   const [inlineToolRequests, setInlineToolRequests] = useState(themeStore.inlineToolRequests)
+  const [toolCardStyle, setToolCardStyle] = useState(themeStore.toolCardStyle)
   const isMobile = useIsMobile()
   void isMobile // reserved for future mobile-specific logic
 
@@ -63,6 +65,11 @@ export function ChatSettings() {
     const v = !inlineToolRequests
     setInlineToolRequests(v)
     themeStore.setInlineToolRequests(v)
+  }
+
+  const handleToolCardStyleChange = (style: ToolCardStyle) => {
+    setToolCardStyle(style)
+    themeStore.setToolCardStyle(style)
   }
 
   return (
@@ -147,6 +154,26 @@ export function ChatSettings() {
             >
               <Toggle enabled={descriptiveToolSteps} onChange={handleDescriptiveToolStepsToggle} />
             </SettingRow>
+
+            <div className="rounded-lg border border-border-200/45 bg-bg-100/35 px-2.5 py-2.5">
+              <div className="flex items-start gap-3">
+                <span className="text-text-400 mt-0.5 shrink-0">
+                  <LayersIcon size={14} />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="text-[13px] font-medium text-text-100">{t('chat.toolCardStyle')}</div>
+                  <div className="text-[11px] text-text-400 mt-0.5 mb-2">{t('chat.toolCardStyleDesc')}</div>
+                  <SegmentedControl
+                    value={toolCardStyle}
+                    options={[
+                      { value: 'classic', label: t('chat.toolCardClassic') },
+                      { value: 'compact', label: t('chat.toolCardCompact') },
+                    ]}
+                    onChange={v => handleToolCardStyleChange(v as ToolCardStyle)}
+                  />
+                </div>
+              </div>
+            </div>
 
             <div className="rounded-lg border border-border-200/45 bg-bg-100/35 px-2.5 py-2.5">
               <div className="flex items-start gap-3">

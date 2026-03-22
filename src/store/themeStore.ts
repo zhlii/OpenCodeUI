@@ -82,6 +82,10 @@ const DEFAULT_DESCRIPTIVE_TOOL_STEPS = false
 const DEFAULT_INLINE_TOOL_REQUESTS = false
 const DEFAULT_CODE_WORD_WRAP = false
 
+/** 工具输出渲染风格：classic = 经典（input+output 分离），compact = 精简（只展示 output，header 更矮） */
+export type ToolCardStyle = 'classic' | 'compact'
+const DEFAULT_TOOL_CARD_STYLE: ToolCardStyle = 'classic'
+
 export interface ThemeState {
   /** 当前选中的主题风格 ID */
   presetId: string
@@ -105,6 +109,8 @@ export interface ThemeState {
   inlineToolRequests: boolean
   /** 代码块/diff 自动换行 */
   codeWordWrap: boolean
+  /** 工具输出渲染风格 */
+  toolCardStyle: ToolCardStyle
 }
 
 // ============================================
@@ -122,6 +128,7 @@ const STORAGE_KEY_DIFF_STYLE = 'diff-style'
 const STORAGE_KEY_DESCRIPTIVE_TOOL_STEPS = 'descriptive-tool-steps'
 const STORAGE_KEY_INLINE_TOOL_REQUESTS = 'inline-tool-requests'
 const STORAGE_KEY_CODE_WORD_WRAP = 'code-word-wrap'
+const STORAGE_KEY_TOOL_CARD_STYLE = 'tool-card-style'
 
 // ============================================
 // DOM Style Element IDs
@@ -173,6 +180,12 @@ class ThemeStore {
     const savedCodeWordWrap = localStorage.getItem(STORAGE_KEY_CODE_WORD_WRAP)
     const codeWordWrap = savedCodeWordWrap === 'true' ? true : DEFAULT_CODE_WORD_WRAP
 
+    const savedToolCardStyle = localStorage.getItem(STORAGE_KEY_TOOL_CARD_STYLE) as ToolCardStyle | null
+    const toolCardStyle: ToolCardStyle =
+      savedToolCardStyle === 'classic' || savedToolCardStyle === 'compact'
+        ? savedToolCardStyle
+        : DEFAULT_TOOL_CARD_STYLE
+
     this.state = {
       presetId: savedPreset,
       colorMode: savedMode,
@@ -185,6 +198,7 @@ class ThemeStore {
       descriptiveToolSteps,
       inlineToolRequests,
       codeWordWrap,
+      toolCardStyle,
     }
   }
 
@@ -226,6 +240,9 @@ class ThemeStore {
   }
   get codeWordWrap() {
     return this.state.codeWordWrap
+  }
+  get toolCardStyle() {
+    return this.state.toolCardStyle
   }
 
   /** 获取当前主题预设（内置主题返回对象，自定义返回 undefined） */
@@ -342,6 +359,13 @@ class ThemeStore {
     if (this.state.codeWordWrap === enabled) return
     this.state = { ...this.state, codeWordWrap: enabled }
     localStorage.setItem(STORAGE_KEY_CODE_WORD_WRAP, String(enabled))
+    this.emit()
+  }
+
+  setToolCardStyle(style: ToolCardStyle) {
+    if (this.state.toolCardStyle === style) return
+    this.state = { ...this.state, toolCardStyle: style }
+    localStorage.setItem(STORAGE_KEY_TOOL_CARD_STYLE, style)
     this.emit()
   }
 

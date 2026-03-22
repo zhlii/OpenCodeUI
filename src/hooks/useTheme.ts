@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom'
 import { THEME_SWITCH_DISABLE_MS } from '../constants'
 import { themeStore, type ColorMode } from '../store/themeStore'
 import type { StepFinishDisplay } from '../store/themeStore'
-import type { ReasoningDisplayMode, DiffStyle } from '../store/themeStore'
+import type { ReasoningDisplayMode, DiffStyle, ToolCardStyle } from '../store/themeStore'
 
 // 保持向后兼容的类型别名
 export type ThemeMode = ColorMode
@@ -164,6 +164,12 @@ export function useTheme() {
     themeStore.setCodeWordWrap(enabled)
   }, [])
 
+  // ---- Tool Card Style ----
+
+  const setToolCardStyle = useCallback((style: ToolCardStyle) => {
+    themeStore.setToolCardStyle(style)
+  }, [])
+
   return {
     // 日夜模式（向后兼容）
     mode: state.colorMode,
@@ -215,5 +221,9 @@ export function useTheme() {
     // 代码块 / diff 自动换行
     codeWordWrap: state.codeWordWrap,
     setCodeWordWrap,
+
+    // 工具输出渲染风格
+    toolCardStyle: state.toolCardStyle,
+    setToolCardStyle,
   }
 }
