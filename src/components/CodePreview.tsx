@@ -1,9 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useSyntaxHighlightRef, type HighlightTokens } from '../hooks/useSyntaxHighlight'
+import { useDynamicVirtualScroll } from '../hooks/useDynamicVirtualScroll'
+import { themeStore } from '../store/themeStore'
 
 const LINE_HEIGHT = 20
 const OVERSCAN = 5
 const MAX_LINE_LENGTH = 5000
+const LARGE_FILE_LINES = 2000
+const LARGE_FILE_CHARS = 300000
 
 interface CodePreviewProps {
   code: string
@@ -11,36 +16,39 @@ interface CodePreviewProps {
   truncateLines?: boolean
   maxHeight?: number
   isResizing?: boolean
+  wordWrap?: boolean
 }
 
 /**
  * CodePreview - 代码预览组件
  *
- * 架构（和 SplitDiffView 一致）：
- *   外层容器 (overflow-y: auto, overflow-x: hidden) — 垂直滚动唯一来源
- *     高度占位 (height: totalHeight, relative) — 虚拟滚动
- *       absolute div (translateY: offsetY) — 可见行
- *         flex row
- *           gutter (shrink-0, overflow: hidden) — 行号，不水平滚动
- *           content (flex-1, overflow-x: auto, scrollbar-none) — 代码，独立水平滚动
- *             inline-block min-w-full — 被最宽行撑开
- *     sticky proxy scrollbar (bottom: 0) — 可见的横向滚动条
+ * 默认路径保留现有虚拟滚动；启用自动换行后切到 wrapped 渲染，
+ * 避免固定行高虚拟列表和可变行高互相打架。
  */
-export function CodePreview({ code, language, truncateLines = true, maxHeight, isResizing = false }: CodePreviewProps) {
-  const lines = useMemo(() => {
-    const raw = code.split('\n')
-    if (raw.length > 1 && raw[raw.length - 1] === '' && code.endsWith('\n')) {
-      raw.pop()
-    }
-    return raw
-  }, [code])
+export function CodePreview(props: CodePreviewProps) {
+  const { codeWordWrap } = useSyncExternalStore(themeStore.subscribe, themeStore.getSnapshot)
+  const resolvedWordWrap = props.wordWrap ?? codeWordWrap
+
+  if (resolvedWordWrap) {
+    return <WrappedCodePreview {...props} />
+  }
+
+  return <VirtualizedCodePreview {...props} />
+}
+
+function VirtualizedCodePreview({
+  code,
+  language,
+  truncateLines = true,
+  maxHeight,
+  isResizing = false,
+}: CodePreviewProps) {
+  const { t } = useTranslation(['common'])
+  const lines = useMemo(() => splitCodeLines(code), [code])
   const totalHeight = lines.length * LINE_HEIGHT
-  // 行号栏宽度：根据总行数的位数动态计算，用 ch 单位
   const gutterCh = Math.max(2, String(lines.length).length)
-  // gutter 总宽度 = pl-4(16px) + 数字(gutterCh ch) + pr-3(12px)
   const gutterWidth = `calc(${gutterCh}ch + 1.75rem)`
 
-  // tokens 存在 ref 里，不经过 React state/props
   const enableHighlight = language !== 'text'
   const { tokensRef, version } = useSyntaxHighlightRef(code, {
     lang: language,
@@ -51,6 +59,7 @@ export function CodePreview({ code, language, truncateLines = true, maxHeight, i
   const contentRef = useRef<HTMLDivElement>(null)
   const scrollbarRef = useRef<HTMLDivElement>(null)
   const scrollSourceRef = useRef<'content' | 'scrollbar' | null>(null)
+  const maxScrollWidthRef = useRef(0)
   const [scrollTop, setScrollTop] = useState(0)
   const [containerHeight, setContainerHeight] = useState(0)
   const [contentWidth, setContentWidth] = useState(0)
@@ -67,7 +76,6 @@ export function CodePreview({ code, language, truncateLines = true, maxHeight, i
     }
   }, [scrollTop, containerHeight, lines.length])
 
-  // 监听外层容器大小
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
@@ -92,19 +100,29 @@ export function CodePreview({ code, language, truncateLines = true, maxHeight, i
     }
   }, [isResizing])
 
-  // 测量 content 宽度（scrollWidth vs clientWidth，判断是否需要横向滚动条）
   useEffect(() => {
     const content = contentRef.current
     if (!content) return
+    const inner = content.firstElementChild as HTMLElement
 
     const measure = () => {
-      const inner = content.firstElementChild as HTMLElement
-      if (inner) setContentWidth(inner.scrollWidth)
+      if (inner) {
+        const sw = inner.scrollWidth
+        if (sw > maxScrollWidthRef.current) {
+          maxScrollWidthRef.current = sw
+          inner.style.minWidth = `${sw}px`
+        }
+        setContentWidth(maxScrollWidthRef.current)
+      }
       setContentClientWidth(content.clientWidth)
     }
 
     measure()
-    const ro = new ResizeObserver(measure)
+    const ro = new ResizeObserver(() => {
+      maxScrollWidthRef.current = 0
+      if (inner) inner.style.minWidth = ''
+      measure()
+    })
     ro.observe(content)
     const mo = new MutationObserver(measure)
     mo.observe(content, { childList: true, subtree: true })
@@ -114,12 +132,10 @@ export function CodePreview({ code, language, truncateLines = true, maxHeight, i
     }
   }, [startIndex, endIndex])
 
-  // 外层垂直滚动
   const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     setScrollTop(e.currentTarget.scrollTop)
   }, [])
 
-  // proxy scrollbar ↔ content 面板水平同步（带 guard 防循环触发）
   const handleScrollbar = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     if (scrollSourceRef.current === 'content') return
     scrollSourceRef.current = 'scrollbar'
@@ -128,6 +144,7 @@ export function CodePreview({ code, language, truncateLines = true, maxHeight, i
       scrollSourceRef.current = null
     })
   }, [])
+
   const handleContentScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     if (scrollSourceRef.current === 'scrollbar') return
     scrollSourceRef.current = 'content'
@@ -137,9 +154,7 @@ export function CodePreview({ code, language, truncateLines = true, maxHeight, i
     })
   }, [])
 
-  // 渲染可见行：分别生成 gutter 和 content
   const { gutterRows, contentRows } = useMemo(() => {
-    void version
     const tokens = tokensRef.current
     const gutters: React.ReactNode[] = []
     const contents: React.ReactNode[] = []
@@ -167,19 +182,17 @@ export function CodePreview({ code, language, truncateLines = true, maxHeight, i
             </span>
           )
         }
+      } else if (truncateLines && rawLine.length > MAX_LINE_LENGTH) {
+        isTruncated = true
+        displayContent = <span className="text-text-200 whitespace-pre">{rawLine.slice(0, MAX_LINE_LENGTH)}</span>
       } else {
-        if (truncateLines && rawLine.length > MAX_LINE_LENGTH) {
-          isTruncated = true
-          displayContent = <span className="text-text-200 whitespace-pre">{rawLine.slice(0, MAX_LINE_LENGTH)}</span>
-        } else {
-          displayContent = <span className="text-text-200 whitespace-pre">{rawLine}</span>
-        }
+        displayContent = <span className="text-text-200 whitespace-pre">{rawLine}</span>
       }
 
       gutters.push(
         <div
           key={i}
-          className="text-text-500 text-right pr-3 pl-4 leading-5 select-none bg-bg-100"
+          className="text-text-500 text-right pr-3 pl-4 leading-5 select-none"
           style={{ height: LINE_HEIGHT }}
         >
           {i + 1}
@@ -189,13 +202,14 @@ export function CodePreview({ code, language, truncateLines = true, maxHeight, i
       contents.push(
         <div key={i} className="leading-5 pl-3 pr-4 whitespace-pre" style={{ height: LINE_HEIGHT }}>
           {displayContent}
-          {isTruncated && <span className="text-text-500 ml-1">… (truncated)</span>}
+          {isTruncated && <span className="text-text-500 ml-1">{t('common:truncated')}</span>}
         </div>,
       )
     }
 
     return { gutterRows: gutters, contentRows: contents }
-  }, [startIndex, endIndex, lines, version, tokensRef, truncateLines])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- version 用于在 tokensRef 更新时触发重算
+  }, [startIndex, endIndex, lines, version, truncateLines, t])
 
   return (
     <div
@@ -204,15 +218,12 @@ export function CodePreview({ code, language, truncateLines = true, maxHeight, i
       onScroll={handleScroll}
       style={maxHeight !== undefined ? { maxHeight } : undefined}
     >
-      {/* 虚拟滚动高度占位 */}
       <div style={{ height: totalHeight, position: 'relative' }}>
         <div className="absolute top-0 left-0 right-0 flex" style={{ transform: `translateY(${offsetY}px)` }}>
-          {/* Gutter: 固定宽度，不水平滚动，跟外层一起垂直滚动 */}
-          <div className="shrink-0 overflow-hidden bg-bg-100" style={{ width: gutterWidth }}>
+          <div className="shrink-0 overflow-hidden" style={{ width: gutterWidth }}>
             {gutterRows}
           </div>
 
-          {/* Content: 独立水平滚动，隐藏自身滚动条，由 proxy 控制 */}
           <div
             ref={contentRef}
             className="flex-1 min-w-0 overflow-x-auto scrollbar-none"
@@ -223,10 +234,8 @@ export function CodePreview({ code, language, truncateLines = true, maxHeight, i
         </div>
       </div>
 
-      {/* Sticky proxy 横向滚动条 — 只在内容实际溢出时显示 */}
       {contentWidth > contentClientWidth && (
-        <div className="sticky bottom-0 z-10 flex bg-bg-100/90 backdrop-blur-sm">
-          {/* gutter 占位 */}
+        <div className="sticky bottom-0 z-10 flex">
           <div className="shrink-0" style={{ width: gutterWidth }} />
           <div ref={scrollbarRef} className="flex-1 min-w-0 overflow-x-auto code-scrollbar" onScroll={handleScrollbar}>
             <div style={{ width: contentWidth, height: 1 }} />
@@ -237,9 +246,88 @@ export function CodePreview({ code, language, truncateLines = true, maxHeight, i
   )
 }
 
-// ============================================
-// Token 截断渲染
-// ============================================
+function WrappedCodePreview({ code, language, truncateLines = true, maxHeight, isResizing = false }: CodePreviewProps) {
+  const { t } = useTranslation(['common'])
+  const lines = useMemo(() => splitCodeLines(code), [code])
+  const isLargeFile = lines.length > LARGE_FILE_LINES || code.length > LARGE_FILE_CHARS
+  const gutterCh = Math.max(2, String(lines.length).length)
+  const gutterWidth = `calc(${gutterCh}ch + 1.75rem)`
+
+  const enableHighlight = !isResizing && language !== 'text' && !isLargeFile
+  const { tokensRef, version } = useSyntaxHighlightRef(code, {
+    lang: language,
+    enabled: enableHighlight,
+  })
+
+  const { containerRef, totalHeight, startIndex, endIndex, offsetY, handleScroll, measureRef } =
+    useDynamicVirtualScroll({ lineCount: lines.length, isResizing })
+
+  const visibleRows = useMemo(() => {
+    const tokens = tokensRef.current
+    const rows: React.ReactNode[] = []
+    for (let i = startIndex; i < endIndex; i++) {
+      const rawLine = lines[i] || ' '
+      const lineTokens = tokens?.[i]
+
+      let displayContent: React.ReactNode
+      let isTruncated = false
+
+      if (lineTokens && lineTokens.length > 0) {
+        if (truncateLines) {
+          const { elements, truncated } = renderTokensTruncated(lineTokens)
+          isTruncated = truncated
+          displayContent = <>{elements}</>
+        } else {
+          displayContent = lineTokens.map((token, j) => (
+            <span key={j} style={token.color ? { color: token.color } : undefined}>
+              {token.content}
+            </span>
+          ))
+        }
+      } else if (truncateLines && rawLine.length > MAX_LINE_LENGTH) {
+        isTruncated = true
+        displayContent = <span className="text-text-200">{rawLine.slice(0, MAX_LINE_LENGTH)}</span>
+      } else {
+        displayContent = <span className="text-text-200">{rawLine}</span>
+      }
+
+      rows.push(
+        <div key={i} ref={el => measureRef(i, el)} className="flex">
+          <div
+            className="shrink-0 text-text-500 text-right pr-3 pl-4 leading-5 select-none"
+            style={{ width: gutterWidth, minHeight: LINE_HEIGHT }}
+          >
+            {i + 1}
+          </div>
+          <div
+            className="min-w-0 flex-1 pl-3 pr-4 leading-5 whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
+            style={{ minHeight: LINE_HEIGHT }}
+          >
+            {displayContent}
+            {isTruncated && <span className="text-text-500 ml-1">{t('common:truncated')}</span>}
+          </div>
+        </div>,
+      )
+    }
+    return rows
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- version 用于在 tokensRef 更新时触发重算
+  }, [startIndex, endIndex, lines, version, truncateLines, t, gutterWidth, measureRef])
+
+  return (
+    <div
+      ref={containerRef}
+      className="overflow-y-auto overflow-x-hidden code-scrollbar h-full font-mono text-[11px] leading-relaxed"
+      onScroll={handleScroll}
+      style={maxHeight !== undefined ? { maxHeight } : undefined}
+    >
+      <div style={{ height: totalHeight, position: 'relative' }}>
+        <div className="absolute top-0 left-0 right-0" style={{ transform: `translateY(${offsetY}px)` }}>
+          {visibleRows}
+        </div>
+      </div>
+    </div>
+  )
+}
 
 type HighlightToken = HighlightTokens[number][number]
 
@@ -279,4 +367,12 @@ function renderTokensTruncated(lineTokens: HighlightToken[]): {
   }
 
   return { elements, truncated }
+}
+
+function splitCodeLines(code: string) {
+  const raw = code.split('\n')
+  if (raw.length > 1 && raw[raw.length - 1] === '' && code.endsWith('\n')) {
+    raw.pop()
+  }
+  return raw
 }

@@ -1,20 +1,21 @@
 import { memo, useState, useRef, useEffect, useLayoutEffect, useSyncExternalStore } from 'react'
+import { useTranslation } from 'react-i18next'
 import type { RefObject } from 'react'
 import { CheckIcon, ClockIcon, CircleIcon, CloseIcon, FastForwardIcon } from '../../../components/Icons'
 import { CircularProgress } from '../../../components/CircularProgress'
 import { useTodos, useTodoStats, useCurrentTask, todoStore } from '../../../store'
 import { getSessionTodos } from '../../../api/session'
-import { autoApproveStore } from '../../../store/autoApproveStore'
+import { autoApproveStore, type FullAutoMode } from '../../../store/autoApproveStore'
 import type { TodoItem } from '../../../types/api/event'
 
 // ============================================
 // Full Auto 状态 hook
 // ============================================
 
-function useFullAuto(): boolean {
+function useFullAutoMode(): FullAutoMode {
   return useSyncExternalStore(
     cb => autoApproveStore.onFullAutoChange(cb),
-    () => autoApproveStore.fullAuto,
+    () => autoApproveStore.fullAutoMode,
   )
 }
 
@@ -29,13 +30,14 @@ interface InputFooterProps {
 }
 
 export const InputFooter = memo(function InputFooter({ sessionId, onNewChat, inputContainerRef }: InputFooterProps) {
+  const { t } = useTranslation(['chat', 'common'])
   const todos = useTodos(sessionId ?? null)
   const stats = useTodoStats(sessionId ?? null)
   const currentTask = useCurrentTask(sessionId ?? null)
   const [popoverOpen, setPopoverOpen] = useState(false)
   const popoverRef = useRef<HTMLDivElement>(null)
   const loadedRef = useRef<string | null>(null)
-  const fullAuto = useFullAuto()
+  const fullAutoMode = useFullAutoMode()
 
   // 加载 session 时拉取初始 todos
   useEffect(() => {
@@ -70,24 +72,42 @@ export const InputFooter = memo(function InputFooter({ sessionId, onNewChat, inp
   const taskLabel = currentTask
     ? currentTask.content
     : isAllDone
-      ? 'All tasks done'
-      : `${stats.total - stats.completed} remaining`
+      ? t('inputFooter.allTasksDone')
+      : t('inputFooter.remaining', { count: stats.total - stats.completed })
 
   return (
     <div
       className="relative flex h-full w-full items-center justify-center gap-2 text-[11px] leading-none text-text-500"
       ref={popoverRef}
     >
-      {/* Fast-forward toggle */}
+      {/* Full Auto 三态切换: off → session → global → off */}
       <button
-        onClick={() => autoApproveStore.setFullAuto(!fullAuto)}
+        onClick={() => {
+          if (fullAutoMode === 'off') {
+            autoApproveStore.setFullAutoMode('session')
+          } else if (fullAutoMode === 'session') {
+            autoApproveStore.setFullAutoMode('global')
+          } else {
+            autoApproveStore.setFullAutoMode('off')
+          }
+        }}
         className="shrink-0 flex items-center justify-center hover:text-text-300 transition-colors"
-        title={fullAuto ? 'Act without asking · click to disable' : 'Act without asking'}
+        title={
+          fullAutoMode === 'off'
+            ? t('inputFooter.autoApproveOff')
+            : fullAutoMode === 'session'
+              ? t('inputFooter.autoApproveSession')
+              : t('inputFooter.autoApproveGlobal')
+        }
       >
         <FastForwardIcon
           size={11}
           className={`transition-colors ${
-            fullAuto ? 'text-warning-100 drop-shadow-[0_0_4px_var(--color-warning-100)]' : ''
+            fullAutoMode === 'global'
+              ? 'text-danger-100 drop-shadow-[0_0_4px_var(--color-danger-100)]'
+              : fullAutoMode === 'session'
+                ? 'text-warning-100 drop-shadow-[0_0_4px_var(--color-warning-100)]'
+                : ''
           }`}
         />
       </button>
@@ -97,7 +117,7 @@ export const InputFooter = memo(function InputFooter({ sessionId, onNewChat, inp
       {/* disclaimer / todos */}
       {!hasTodos ? (
         <button onClick={onNewChat} className="hover:text-text-300 transition-colors">
-          Please verify AI responses.
+          {t('inputFooter.pleaseVerify')}
         </button>
       ) : (
         <>
@@ -118,7 +138,7 @@ export const InputFooter = memo(function InputFooter({ sessionId, onNewChat, inp
           <span className="text-text-500/30 shrink-0">·</span>
 
           <button onClick={onNewChat} className="hover:text-text-300 transition-colors shrink-0">
-            New Chat
+            {t('sidebar.newChat')}
           </button>
         </>
       )}
@@ -147,14 +167,16 @@ export const InputFooter = memo(function InputFooter({ sessionId, onNewChat, inp
               </div>
               <div className="flex-1">
                 <div className="text-sm font-medium text-text-100">
-                  {isAllDone ? 'All Done' : `${stats.completed} of ${stats.total} tasks`}
+                  {isAllDone
+                    ? t('inputFooter.allDone')
+                    : t('inputFooter.tasksCount', { done: stats.completed, total: stats.total })}
                 </div>
                 <div className="text-xs text-text-500 mt-0.5">
                   {isAllDone
-                    ? 'Great work!'
+                    ? t('inputFooter.greatWork')
                     : stats.inProgress > 0
-                      ? `${stats.inProgress} in progress`
-                      : `${stats.total - stats.completed} remaining`}
+                      ? t('inputFooter.inProgress', { count: stats.inProgress })
+                      : t('inputFooter.remaining', { count: stats.total - stats.completed })}
                 </div>
               </div>
             </div>

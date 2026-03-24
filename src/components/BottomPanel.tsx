@@ -1,4 +1,5 @@
 import { lazy, memo, Suspense, useCallback, useState, useEffect, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 import { TerminalIcon } from './Icons'
 import { PanelContainer } from './PanelContainer'
 import { layoutStore, useLayoutStore, type TerminalTab, type PanelTab } from '../store/layoutStore'
@@ -22,11 +23,15 @@ interface BottomPanelProps {
 }
 
 function PanelFallback() {
-  return <div className="flex items-center justify-center h-full text-text-400 text-xs">Loading panel...</div>
+  const { t } = useTranslation(['components', 'common'])
+  return (
+    <div className="flex items-center justify-center h-full text-text-400 text-xs">{t('bottomPanel.loadingPanel')}</div>
+  )
 }
 
 export const BottomPanel = memo(function BottomPanel({ directory }: BottomPanelProps) {
-  const { bottomPanelOpen, bottomPanelHeight, previewFile } = useLayoutStore()
+  const { t } = useTranslation(['components', 'common'])
+  const { bottomPanelOpen, bottomPanelHeight } = useLayoutStore()
   const { sessionId } = useMessageStore()
 
   const [isRestoring, setIsRestoring] = useState(false)
@@ -120,7 +125,7 @@ export const BottomPanel = memo(function BottomPanel({ directory }: BottomPanelP
         return (
           <div className="flex flex-col items-center justify-center h-full text-text-400 text-sm gap-2">
             <TerminalIcon size={24} className="opacity-30 animate-pulse" />
-            <span>Restoring sessions...</span>
+            <span>{t('terminal.restoringSessions')}</span>
           </div>
         )
       }
@@ -129,12 +134,12 @@ export const BottomPanel = memo(function BottomPanel({ directory }: BottomPanelP
         return (
           <div className="flex flex-col items-center justify-center h-full text-text-400 text-sm gap-2">
             <TerminalIcon size={24} className="opacity-30" />
-            <span>No content</span>
+            <span>{t('common:noContent')}</span>
             <button
               onClick={handleNewTerminal}
               className="px-3 py-1.5 text-xs bg-bg-200/50 hover:bg-bg-200 text-text-200 rounded-md transition-colors"
             >
-              Create Terminal
+              {t('terminal.createTerminal')}
             </button>
           </div>
         )
@@ -150,23 +155,25 @@ export const BottomPanel = memo(function BottomPanel({ directory }: BottomPanelP
         case 'files':
           return (
             <Suspense fallback={<PanelFallback />}>
-              <FileExplorer
+              <FilesContent
+                activeTab={activeTab}
                 directory={directory ?? ''}
-                previewFile={previewFile}
-                position="bottom"
                 isPanelResizing={isPanelResizing}
+                sessionId={sessionId}
               />
             </Suspense>
           )
         case 'changes':
           if (!sessionId) {
             return (
-              <div className="flex items-center justify-center h-full text-text-400 text-xs">No active session</div>
+              <div className="flex items-center justify-center h-full text-text-400 text-xs">
+                {t('rightPanel.noActiveSession')}
+              </div>
             )
           }
           return (
             <Suspense fallback={<PanelFallback />}>
-              <SessionChangesPanel sessionId={sessionId} isResizing={isPanelResizing} />
+              <ChangesContent activeTab={activeTab} sessionId={sessionId} isPanelResizing={isPanelResizing} />
             </Suspense>
           )
         case 'mcp':
@@ -191,7 +198,7 @@ export const BottomPanel = memo(function BottomPanel({ directory }: BottomPanelP
           return null
       }
     },
-    [isRestoring, handleNewTerminal, directory, previewFile, sessionId, isPanelResizing],
+    [isRestoring, handleNewTerminal, directory, sessionId, isPanelResizing, t],
   )
 
   return (
@@ -229,6 +236,66 @@ const TerminalContent = memo(function TerminalContent({ activeTab, directory }: 
     <>
       {terminalTabs.map(tab => (
         <Terminal key={tab.id} ptyId={tab.id} directory={directory} isActive={tab.id === activeTab.id} />
+      ))}
+    </>
+  )
+})
+
+interface FilesContentProps {
+  activeTab: PanelTab
+  directory?: string
+  isPanelResizing?: boolean
+  sessionId?: string | null
+}
+
+const FilesContent = memo(function FilesContent({
+  activeTab,
+  directory,
+  isPanelResizing = false,
+  sessionId,
+}: FilesContentProps) {
+  const { panelTabs } = useLayoutStore()
+  const fileTabs = panelTabs.filter(t => t.position === 'bottom' && t.type === 'files')
+
+  return (
+    <>
+      {fileTabs.map(tab => (
+        <div key={tab.id} className={tab.id === activeTab.id ? 'h-full' : 'hidden'}>
+          <FileExplorer
+            panelTabId={tab.id}
+            directory={directory}
+            previewFile={tab.previewFile ?? null}
+            previewFiles={tab.previewFiles ?? []}
+            position="bottom"
+            isPanelResizing={isPanelResizing}
+            sessionId={sessionId}
+          />
+        </div>
+      ))}
+    </>
+  )
+})
+
+interface ChangesContentProps {
+  activeTab: PanelTab
+  sessionId: string
+  isPanelResizing?: boolean
+}
+
+const ChangesContent = memo(function ChangesContent({
+  activeTab,
+  sessionId,
+  isPanelResizing = false,
+}: ChangesContentProps) {
+  const { panelTabs } = useLayoutStore()
+  const changeTabs = panelTabs.filter(t => t.position === 'bottom' && t.type === 'changes')
+
+  return (
+    <>
+      {changeTabs.map(tab => (
+        <div key={tab.id} className={tab.id === activeTab.id ? 'h-full' : 'hidden'}>
+          <SessionChangesPanel sessionId={sessionId} isResizing={isPanelResizing} />
+        </div>
       ))}
     </>
   )

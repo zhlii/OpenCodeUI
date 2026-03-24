@@ -1,4 +1,4 @@
-import { useRef, useMemo, useCallback } from 'react'
+import { useRef, useMemo, useCallback, useEffect } from 'react'
 import { useMessages } from '../../../store/messageStoreHooks'
 import { getMessageText, type FilePart, type AgentPart } from '../../../types/message'
 import type { Attachment } from '../../attachment'
@@ -101,7 +101,9 @@ export function useInputHistory({ textareaRef }: UseInputHistoryOptions): UseInp
   const savedInputRef = useRef<HistoryEntry>({ text: '', attachments: [] })
   // 稳定引用，供回调内读取最新值
   const userHistoryRef = useRef(userHistory)
-  userHistoryRef.current = userHistory
+  useEffect(() => {
+    userHistoryRef.current = userHistory
+  }, [userHistory])
 
   const resetHistoryIndex = useCallback(() => {
     historyIndexRef.current = -1

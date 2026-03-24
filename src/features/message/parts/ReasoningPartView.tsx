@@ -1,8 +1,10 @@
 import { memo, useState, useRef, useEffect, useMemo, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
 import { ChevronDownIcon, LightbulbIcon, SpinnerIcon } from '../../../components/Icons'
 import { ScrollArea } from '../../../components/ui'
 import { useDelayedRender } from '../../../hooks'
 import { useTheme } from '../../../hooks/useTheme'
+import { MarkdownRenderer } from '../../../components/MarkdownRenderer'
 import type { ReasoningPart } from '../../../types/message'
 
 // italic 默认不显示前导图标；如果后续要恢复，只改这里。
@@ -14,6 +16,7 @@ interface ReasoningPartViewProps {
 }
 
 export const ReasoningPartView = memo(function ReasoningPartView({ part, isStreaming }: ReasoningPartViewProps) {
+  const { t } = useTranslation('message')
   const { reasoningDisplayMode } = useTheme()
   const rawText = part.text || ''
 
@@ -27,6 +30,7 @@ export const ReasoningPartView = memo(function ReasoningPartView({ part, isStrea
   const summaryContainerRef = useRef<HTMLDivElement>(null)
   const summaryMeasureRef = useRef<HTMLSpanElement>(null)
   const [summaryOverflow, setSummaryOverflow] = useState(false)
+
   const collapsedPreview = useMemo(() => (displayText || '').replace(/\s+/g, ' ').trim(), [displayText])
   const thoughtDurationLabel = useMemo(() => {
     const start = part.time?.start
@@ -37,11 +41,11 @@ export const ReasoningPartView = memo(function ReasoningPartView({ part, isStrea
     if (durationMs < 10000) return `${(durationMs / 1000).toFixed(1)}s`
     return `${Math.round(durationMs / 1000)}s`
   }, [part.time?.start, part.time?.end])
-  const summaryText = collapsedPreview || (isPartStreaming ? 'Thinking...' : '')
+  const summaryText = collapsedPreview || (isPartStreaming ? t('reasoning.thinking') : '')
   const hasLineBreak = /[\r\n]/.test(rawText)
 
   const measureSummaryOverflow = useCallback(() => {
-    if (reasoningDisplayMode !== 'italic') return
+    if (reasoningDisplayMode !== 'italic' && reasoningDisplayMode !== 'markdown') return
     const containerEl = summaryContainerRef.current
     const measureEl = summaryMeasureRef.current
     if (!containerEl || !measureEl) return
@@ -75,7 +79,7 @@ export const ReasoningPartView = memo(function ReasoningPartView({ part, isStrea
   }, [displayText, isPartStreaming, expanded, reasoningDisplayMode])
 
   useEffect(() => {
-    if (reasoningDisplayMode !== 'italic') return
+    if (reasoningDisplayMode !== 'italic' && reasoningDisplayMode !== 'markdown') return
     measureSummaryOverflow()
 
     const raf = requestAnimationFrame(measureSummaryOverflow)
@@ -98,13 +102,14 @@ export const ReasoningPartView = memo(function ReasoningPartView({ part, isStrea
 
   if (!hasContent) return null
 
-  if (reasoningDisplayMode === 'italic') {
+  if (reasoningDisplayMode === 'italic' || reasoningDisplayMode === 'markdown') {
+    const isMarkdownMode = reasoningDisplayMode === 'markdown'
     const shouldUseToggle = isPartStreaming || hasLineBreak || summaryOverflow
     const expandedMetaText = isPartStreaming
-      ? 'Thinking...'
+      ? t('reasoning.thinking')
       : thoughtDurationLabel
-        ? `Thought for ${thoughtDurationLabel}`
-        : 'Thought process'
+        ? t('reasoning.thoughtFor', { duration: thoughtDurationLabel })
+        : t('reasoning.thoughtProcess')
     const summaryClassName = expanded
       ? isPartStreaming
         ? 'text-[12px] leading-5 text-text-200'
@@ -112,7 +117,7 @@ export const ReasoningPartView = memo(function ReasoningPartView({ part, isStrea
       : isPartStreaming
         ? 'text-[12px] leading-5 text-text-200 whitespace-nowrap overflow-hidden text-ellipsis'
         : 'text-[12px] leading-5 text-text-300 whitespace-nowrap overflow-hidden text-ellipsis'
-    const bodyClassName = 'text-text-300'
+
     const content = shouldUseToggle ? (
       <>
         <button
@@ -124,7 +129,7 @@ export const ReasoningPartView = memo(function ReasoningPartView({ part, isStrea
           <div ref={summaryContainerRef} className="relative min-w-0 flex-1 overflow-hidden">
             <span className="relative inline-block min-w-0 max-w-full align-top">
               <span
-                className={`block min-w-0 italic ${summaryClassName} ${isPartStreaming ? 'reasoning-shimmer-text' : ''}`}
+                className={`block min-w-0 ${isMarkdownMode ? '' : 'italic '} ${summaryClassName} ${isPartStreaming ? 'reasoning-shimmer-text' : ''}`}
               >
                 {expanded ? expandedMetaText : summaryText}
               </span>
@@ -132,13 +137,15 @@ export const ReasoningPartView = memo(function ReasoningPartView({ part, isStrea
             <span
               ref={summaryMeasureRef}
               aria-hidden="true"
-              className="pointer-events-none absolute inset-0 invisible whitespace-nowrap text-[12px] leading-5 italic"
+              className={`pointer-events-none absolute inset-0 invisible whitespace-nowrap text-[12px] leading-5 ${
+                isMarkdownMode ? '' : 'italic'
+              }`}
             >
               {summaryText}
             </span>
           </div>
           <span
-            className={`inline-flex h-5 w-3 items-center justify-center shrink-0 text-text-500 group-hover/reasoning:text-text-300 transition-[transform,color] duration-200 ${expanded ? 'rotate-180' : ''}`}
+            className={`inline-flex h-5 w-3 items-center justify-center shrink-0 text-text-500 group-hover/reasoning:text-text-300 transition-[transform,color] duration-200 ${expanded ? '' : '-rotate-90'}`}
           >
             <ChevronDownIcon size={12} />
           </span>
@@ -149,26 +156,35 @@ export const ReasoningPartView = memo(function ReasoningPartView({ part, isStrea
             expanded ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-75'
           }`}
         >
-          <div className="overflow-hidden">
-            {shouldRenderBody && (
-              <div
-                className={`pt-0.5 pr-7 text-[12px] leading-6 italic whitespace-pre-wrap break-words overflow-x-hidden ${bodyClassName}`}
-              >
-                {displayText}
-              </div>
-            )}
+          <div className="min-h-0 min-w-0 overflow-hidden" style={{ clipPath: 'inset(0 -100% 0 -100%)' }}>
+            {shouldRenderBody &&
+              (isMarkdownMode ? (
+                <div className="pt-0.5 pr-7 text-[12px]">
+                  <MarkdownRenderer content={displayText} variant="reasoning" isStreaming={isPartStreaming} />
+                </div>
+              ) : (
+                <div className="pt-0.5 pr-7 text-[12px] leading-6 italic whitespace-pre-wrap break-words overflow-x-hidden text-text-300">
+                  {displayText}
+                </div>
+              ))}
           </div>
         </div>
       </>
     ) : (
-      <div ref={summaryContainerRef} className="relative min-w-0 overflow-hidden">
-        <span className={`block min-w-0 text-[12px] leading-5 italic whitespace-pre-wrap break-words ${bodyClassName}`}>
-          {displayText}
-        </span>
+      <div ref={summaryContainerRef} className="relative min-w-0 overflow-hidden text-[12px]">
+        {isMarkdownMode ? (
+          <MarkdownRenderer content={displayText} variant="reasoning" isStreaming={isPartStreaming} />
+        ) : (
+          <span className="block min-w-0 text-[12px] leading-5 italic whitespace-pre-wrap break-words text-text-300">
+            {displayText}
+          </span>
+        )}
         <span
           ref={summaryMeasureRef}
           aria-hidden="true"
-          className="pointer-events-none absolute inset-0 invisible whitespace-nowrap text-[12px] leading-5 italic"
+          className={`pointer-events-none absolute inset-0 invisible whitespace-nowrap text-[12px] leading-5 ${
+            isMarkdownMode ? '' : 'italic'
+          }`}
         >
           {summaryText}
         </span>
@@ -216,21 +232,19 @@ export const ReasoningPartView = memo(function ReasoningPartView({ part, isStrea
           )}
         </span>
         <span className="text-xs font-medium leading-5 whitespace-nowrap text-left">
-          {isPartStreaming ? 'Thinking...' : 'Thinking'}
+          {isPartStreaming ? t('reasoning.thinking') : t('reasoning.thinkingLabel')}
         </span>
         <span
-          className={`inline-flex h-5 w-3 items-center justify-center shrink-0 transition-transform duration-300 ${expanded ? 'rotate-180' : ''}`}
+          className={`inline-flex h-5 w-3 items-center justify-center shrink-0 transition-transform duration-300 ${expanded ? '' : '-rotate-90'}`}
         >
           <ChevronDownIcon size={12} />
         </span>
       </button>
 
       <div
-        className={`grid transition-[grid-template-rows] duration-300 ease-out ${
-          expanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
-        }`}
+        className={`grid transition-[grid-template-rows] duration-300 ease-out ${expanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`}
       >
-        <div className="overflow-hidden">
+        <div className="min-h-0 min-w-0 overflow-hidden" style={{ clipPath: 'inset(0 -100% 0 -100%)' }}>
           {shouldRenderBody && (
             <ScrollArea ref={scrollAreaRef} maxHeight={192} className="border-t border-border-300/20 bg-bg-200/30">
               <div className="px-2 py-2 text-text-300 text-xs font-mono whitespace-pre-wrap break-words overflow-x-hidden">

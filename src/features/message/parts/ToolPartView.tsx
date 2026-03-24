@@ -1,8 +1,18 @@
-import { memo, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
+import { useTranslation } from 'react-i18next'
+import { diffLines } from 'diff'
 import { ChevronDownIcon, ChevronRightIcon } from '../../../components/Icons'
 import type { ToolPart } from '../../../types/message'
 import { useDelayedRender } from '../../../hooks'
+import { useTheme } from '../../../hooks/useTheme'
 import { formatToolName, formatDuration } from '../../../utils/formatUtils'
+import {
+  useInlineToolRequests,
+  findPermissionRequestForTool,
+  findQuestionRequestForTool,
+} from '../../chat/InlineToolRequestContext'
+import { InlinePermission } from '../../chat/InlinePermission'
+import { InlineQuestion } from '../../chat/InlineQuestion'
 import {
   getToolIcon,
   extractToolData,
@@ -24,6 +34,10 @@ interface ToolPartViewProps {
   /** Compact layout: icon inline with text (14px column), no timeline connectors.
    *  Used for single-tool groups to align with ReasoningPartView. */
   compact?: boolean
+  /** Descriptive steps mode: no icon/timeline, flat rows aligned with step summary. */
+  descriptive?: boolean
+  /** Parent assistant message is still streaming. */
+  isStreaming?: boolean
 }
 
 export const ToolPartView = memo(function ToolPartView({
@@ -31,12 +45,10 @@ export const ToolPartView = memo(function ToolPartView({
   isFirst = false,
   isLast = false,
   compact = false,
+  descriptive = false,
+  isStreaming = false,
 }: ToolPartViewProps) {
-  const [expanded, setExpanded] = useState(() => {
-    return part.state.status === 'running' || part.state.status === 'pending'
-  })
-  const shouldRenderBody = useDelayedRender(expanded)
-
+  const { t } = useTranslation('message')
   const { state, tool: toolName } = part
   const title = state.title || ''
 
@@ -44,6 +56,63 @@ export const ToolPartView = memo(function ToolPartView({
 
   const isActive = state.status === 'running' || state.status === 'pending'
   const isError = state.status === 'error'
+  const [expanded, setExpanded] = useState(() => isActive)
+  const hasAutoExpandedReadableRef = useRef(false)
+  const { inlineToolRequests, immersiveMode, compactInlinePermission } = useTheme()
+
+  const { pendingPermissions, pendingQuestions, onPermissionReply, onQuestionReply, onQuestionReject, isReplying } =
+    useInlineToolRequests()
+  const childSessionId = getTaskChildSessionId(part)
+  const permissionRequest = inlineToolRequests
+    ? findPermissionRequestForTool(pendingPermissions, part.callID, childSessionId)
+    : undefined
+  const questionRequest = inlineToolRequests
+    ? findQuestionRequestForTool(pendingQuestions, part.callID, childSessionId)
+    : undefined
+
+  // ── 延迟卸载 edit/write 权限组件 ──
+  // 用户授权后 permissionRequest 会立即消失，但工具结果可能还没到，
+  // 为了避免 "权限消失→空白→结果出现" 的跳动，缓存最后一次权限请求，
+  // 在工具完成之前继续渲染（以 resolved 状态）
+  const lastPermissionRef = useRef(permissionRequest)
+  if (permissionRequest) {
+    lastPermissionRef.current = permissionRequest
+  }
+  const isFilePermission =
+    lastPermissionRef.current?.permission === 'edit' || lastPermissionRef.current?.permission === 'write'
+  // 工具完成后清除缓存
+  const toolDone = state.status === 'completed' || state.status === 'error'
+  if (toolDone) {
+    lastPermissionRef.current = undefined
+  }
+  // 权限已批准但工具还没完成 → 保留渲染
+  const permissionResolved = !permissionRequest && !!lastPermissionRef.current && isFilePermission && !toolDone
+
+  const hasPendingInteraction = !!permissionRequest || !!questionRequest
+  // 精简模式：非 edit/write 权限时不隐藏 ToolBody（ToolBody 已经渲染了命令内容）
+  const isEditWritePermission =
+    permissionRequest?.permission === 'edit' || permissionRequest?.permission === 'write' || permissionResolved
+  const hideToolBodyForPermission = isEditWritePermission
+  // 精简模式：ToolBody 已渲染时，InlinePermission 只显示按钮
+  const permissionContentHidden = compactInlinePermission && !isEditWritePermission && !!permissionRequest
+  const effectiveExpanded = expanded || hasPendingInteraction || permissionResolved
+  const shouldRenderBody = useDelayedRender(effectiveExpanded)
+  const isReadable = isReadableTool(toolName)
+
+  useEffect(() => {
+    if (isActive || hasPendingInteraction || permissionResolved) {
+      if (immersiveMode && descriptive && isReadable) {
+        hasAutoExpandedReadableRef.current = true
+      }
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- 运行中或待交互时保持展开
+      setExpanded(true)
+    } else if (immersiveMode && descriptive && !isReadable) {
+      setExpanded(false)
+    } else if (immersiveMode && descriptive && isStreaming && isReadable && !hasAutoExpandedReadableRef.current) {
+      hasAutoExpandedReadableRef.current = true
+      setExpanded(true)
+    }
+  }, [isActive, hasPendingInteraction, permissionResolved, immersiveMode, descriptive, isStreaming, isReadable])
 
   // Shared icon element
   const toolIcon = (
@@ -64,6 +133,103 @@ export const ToolPartView = memo(function ToolPartView({
       {getToolIcon(toolName)}
     </div>
   )
+
+  // 需要渲染权限组件的请求对象：优先用活跃的，否则用缓存的（resolved 态）
+  const displayPermission = permissionRequest || (permissionResolved ? lastPermissionRef.current : undefined)
+
+  const bodyContent = (
+    <>
+      {!hideToolBodyForPermission && <ToolBody part={part} />}
+      {displayPermission && (
+        <div className={hideToolBodyForPermission && !permissionContentHidden ? '' : 'pt-2'}>
+          <InlinePermission
+            request={displayPermission}
+            onReply={onPermissionReply}
+            isReplying={isReplying}
+            resolved={permissionResolved}
+            contentHidden={permissionContentHidden}
+          />
+        </div>
+      )}
+      {questionRequest && (
+        <div className="pt-2">
+          <InlineQuestion
+            request={questionRequest}
+            onReply={onQuestionReply}
+            onReject={onQuestionReject}
+            isReplying={isReplying}
+          />
+        </div>
+      )}
+    </>
+  )
+
+  if (descriptive) {
+    const data = extractToolData(part)
+    const hasDiffFiles = !!data.files?.length
+    // diffStats 可能从 metadata 来，也可能需要从 diff 数据计算
+    const diffStats = data.diffStats || computeDiffStatsFromData(data)
+
+    return (
+      <div className="group py-0.5">
+        <button
+          type="button"
+          className="flex w-full items-center gap-3 rounded-md px-0 py-1 text-left hover:bg-bg-200/30 transition-colors group/header"
+          onClick={() => setExpanded(!expanded)}
+        >
+          <div className="flex min-w-0 flex-1 items-baseline gap-2 overflow-hidden">
+            <span
+              className={`shrink-0 font-medium text-[13px] leading-tight ${
+                isActive
+                  ? 'reasoning-shimmer-text'
+                  : isError
+                    ? 'text-danger-100'
+                    : 'text-text-200 group-hover/header:text-text-100'
+              }`}
+            >
+              {formatToolName(toolName)}
+            </span>
+
+            {title && (
+              <span
+                className={`min-w-0 truncate font-mono text-xs ${
+                  isActive ? 'reasoning-shimmer-text' : isError ? 'text-danger-100/80' : 'text-text-400'
+                }`}
+              >
+                {title}
+              </span>
+            )}
+
+            {/* Diff stats — 紧跟 title，收起时且非失败时显示 */}
+            {!effectiveExpanded && !isActive && !isError && (diffStats || hasDiffFiles) && (
+              <span className="shrink-0 flex items-center gap-1 text-[10px] font-mono font-medium tabular-nums">
+                {(diffStats?.additions ?? 0) > 0 && <span className="text-success-100">+{diffStats!.additions}</span>}
+                {(diffStats?.deletions ?? 0) > 0 && <span className="text-danger-100">-{diffStats!.deletions}</span>}
+              </span>
+            )}
+          </div>
+
+          <div className="ml-auto flex shrink-0 items-center gap-2">
+            {duration !== undefined && state.status === 'completed' && (
+              <span
+                className={`text-[10px] font-mono tabular-nums ${isError ? 'text-danger-100/70' : 'text-text-500'}`}
+              >
+                {formatDuration(duration)}
+              </span>
+            )}
+          </div>
+        </button>
+
+        <div
+          className={`grid transition-[grid-template-rows] duration-300 ease-in-out ${
+            effectiveExpanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
+          }`}
+        >
+          <div className="overflow-hidden">{shouldRenderBody && <div className="pb-2 pt-1">{bodyContent}</div>}</div>
+        </div>
+      </div>
+    )
+  }
 
   // ── Compact layout (single-tool, no timeline) ──
   // Grid: [14px icon] [gap 6px] [content] — mirrors ReasoningPartView alignment
@@ -104,17 +270,17 @@ export const ToolPartView = memo(function ToolPartView({
                   isActive ? 'opacity-100 text-accent-main-100' : 'opacity-0 w-0 overflow-hidden'
                 }`}
               >
-                Running
+                {t('toolPart.running')}
               </span>
               <span
                 className={`text-[10px] font-medium transition-all duration-300 ${
                   isError ? 'opacity-100 text-danger-100' : 'opacity-0 w-0 overflow-hidden'
                 }`}
               >
-                Failed
+                {t('toolPart.failed')}
               </span>
               <span className="text-text-500">
-                {expanded ? <ChevronDownIcon size={12} /> : <ChevronRightIcon size={12} />}
+                {effectiveExpanded ? <ChevronDownIcon size={12} /> : <ChevronRightIcon size={12} />}
               </span>
             </div>
           </button>
@@ -122,15 +288,11 @@ export const ToolPartView = memo(function ToolPartView({
           {/* Body */}
           <div
             className={`grid transition-[grid-template-rows] duration-300 ease-in-out ${
-              expanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
+              effectiveExpanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
             }`}
           >
             <div className="overflow-hidden">
-              {shouldRenderBody && (
-                <div className="pl-2 pr-2.5 pb-2 pt-1">
-                  <ToolBody part={part} />
-                </div>
-              )}
+              {shouldRenderBody && <div className="pl-2 pr-2.5 pb-2 pt-1">{bodyContent}</div>}
             </div>
           </div>
         </div>
@@ -140,7 +302,7 @@ export const ToolPartView = memo(function ToolPartView({
 
   // ── Timeline layout (multi-tool groups) ──
   return (
-    <div className="group relative flex">
+    <div className="group relative flex min-w-0">
       {/* Timeline Column */}
       <div className="w-8 shrink-0 relative">
         {/* Top connector — 留 4px gap 到 icon */}
@@ -189,17 +351,17 @@ export const ToolPartView = memo(function ToolPartView({
                 isActive ? 'opacity-100 text-accent-main-100' : 'opacity-0 w-0 overflow-hidden'
               }`}
             >
-              Running
+              {t('toolPart.running')}
             </span>
             <span
               className={`text-[10px] font-medium transition-all duration-300 ${
                 isError ? 'opacity-100 text-danger-100' : 'opacity-0 w-0 overflow-hidden'
               }`}
             >
-              Failed
+              {t('toolPart.failed')}
             </span>
             <span className="text-text-500">
-              {expanded ? <ChevronDownIcon size={12} /> : <ChevronRightIcon size={12} />}
+              {effectiveExpanded ? <ChevronDownIcon size={12} /> : <ChevronRightIcon size={12} />}
             </span>
           </div>
         </button>
@@ -207,21 +369,69 @@ export const ToolPartView = memo(function ToolPartView({
         {/* Body - grid collapse */}
         <div
           className={`grid transition-[grid-template-rows] duration-300 ease-in-out ${
-            expanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
+            effectiveExpanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
           }`}
         >
           <div className="overflow-hidden">
-            {shouldRenderBody && (
-              <div className="pl-2 pr-2.5 pb-2 pt-1">
-                <ToolBody part={part} />
-              </div>
-            )}
+            {shouldRenderBody && <div className="pl-2 pr-2.5 pb-2 pt-1">{bodyContent}</div>}
           </div>
         </div>
       </div>
     </div>
   )
 })
+
+// ============================================
+// Helpers
+// ============================================
+
+/** 用户需要阅读/交互的工具 */
+const READABLE_TOOL_PATTERNS = /bash|sh|cmd|terminal|shell|write|save|edit|replace|patch|todo|question|ask/i
+
+function isReadableTool(toolName: string): boolean {
+  return READABLE_TOOL_PATTERNS.test(toolName.toLowerCase())
+}
+
+/** 从 diff 数据计算 diffStats（当 metadata 没给 diffStats 时用） */
+function computeDiffStatsFromData(data: {
+  diff?: { before: string; after: string } | string
+  files?: Array<{ before?: string; after?: string; additions?: number; deletions?: number }>
+}): { additions: number; deletions: number } | undefined {
+  // 多文件
+  if (data.files?.length) {
+    let additions = 0,
+      deletions = 0
+    for (const f of data.files) {
+      if (f.additions !== undefined) additions += f.additions
+      if (f.deletions !== undefined) deletions += f.deletions
+      if (f.additions === undefined && f.before !== undefined && f.after !== undefined) {
+        const s = computeDiffPair(f.before, f.after)
+        additions += s.additions
+        deletions += s.deletions
+      }
+    }
+    return additions || deletions ? { additions, deletions } : undefined
+  }
+
+  // 单个 diff
+  if (data.diff && typeof data.diff === 'object') {
+    const s = computeDiffPair(data.diff.before, data.diff.after)
+    return s.additions || s.deletions ? s : undefined
+  }
+
+  return undefined
+}
+
+function computeDiffPair(before: string, after: string): { additions: number; deletions: number } {
+  const changes = diffLines(before, after)
+  let additions = 0,
+    deletions = 0
+  for (const c of changes) {
+    if (c.added) additions += c.count || 0
+    if (c.removed) deletions += c.count || 0
+  }
+  return { additions, deletions }
+}
 
 // ============================================
 // ToolBody - 根据工具类型选择渲染器
@@ -247,6 +457,12 @@ function ToolBody({ part }: { part: ToolPart }) {
   }
 
   return <DefaultRenderer part={part} data={data} />
+}
+
+function getTaskChildSessionId(part: ToolPart): string | undefined {
+  if (part.tool.toLowerCase() !== 'task') return undefined
+  const metadata = part.state.metadata as Record<string, unknown> | undefined
+  return metadata?.sessionId as string | undefined
 }
 
 // ============================================

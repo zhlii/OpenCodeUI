@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom'
 import { THEME_SWITCH_DISABLE_MS } from '../constants'
 import { themeStore, type ColorMode } from '../store/themeStore'
 import type { StepFinishDisplay } from '../store/themeStore'
-import type { ReasoningDisplayMode } from '../store/themeStore'
+import type { ReasoningDisplayMode, DiffStyle, ToolCardStyle } from '../store/themeStore'
 
 // 保持向后兼容的类型别名
 export type ThemeMode = ColorMode
@@ -140,6 +140,42 @@ export function useTheme() {
     themeStore.setReasoningDisplayMode(mode)
   }, [])
 
+  // ---- Diff Style ----
+
+  const setDiffStyle = useCallback((style: DiffStyle) => {
+    themeStore.setDiffStyle(style)
+  }, [])
+
+  // ---- Descriptive Tool Steps ----
+
+  const setDescriptiveToolSteps = useCallback((enabled: boolean) => {
+    themeStore.setDescriptiveToolSteps(enabled)
+  }, [])
+
+  // ---- Inline Tool Requests ----
+
+  const setInlineToolRequests = useCallback((enabled: boolean) => {
+    themeStore.setInlineToolRequests(enabled)
+  }, [])
+
+  // ---- Code Word Wrap ----
+
+  const setCodeWordWrap = useCallback((enabled: boolean) => {
+    themeStore.setCodeWordWrap(enabled)
+  }, [])
+
+  // ---- Tool Card Style ----
+
+  const setToolCardStyle = useCallback((style: ToolCardStyle) => {
+    themeStore.setToolCardStyle(style)
+  }, [])
+
+  // ---- Immersive Mode ----
+
+  const setImmersiveMode = useCallback((enabled: boolean) => {
+    themeStore.setImmersiveMode(enabled)
+  }, [])
+
   return {
     // 日夜模式（向后兼容）
     mode: state.colorMode,
@@ -175,5 +211,35 @@ export function useTheme() {
     // 宽模式
     isWideMode: state.wideMode,
     toggleWideMode: themeStore.toggleWideMode.bind(themeStore),
+
+    // Diff 行标记风格
+    diffStyle: state.diffStyle,
+    setDiffStyle,
+
+    // 带工具描述的 steps 摘要
+    descriptiveToolSteps: state.descriptiveToolSteps,
+    setDescriptiveToolSteps,
+
+    // 工具内嵌权限/提问
+    inlineToolRequests: state.inlineToolRequests,
+    setInlineToolRequests,
+
+    // 代码块 / diff 自动换行
+    codeWordWrap: state.codeWordWrap,
+    setCodeWordWrap,
+
+    // 工具输出渲染风格
+    toolCardStyle: state.toolCardStyle,
+    setToolCardStyle,
+
+    // 沉浸模式
+    immersiveMode: state.immersiveMode,
+    setImmersiveMode,
+
+    // 内嵌权限精简模式
+    compactInlinePermission: state.compactInlinePermission,
+    setCompactInlinePermission: useCallback((enabled: boolean) => {
+      themeStore.setCompactInlinePermission(enabled)
+    }, []),
   }
 }

@@ -333,7 +333,9 @@ export function useSyntaxHighlight(code: string, options: HighlightOptions & { m
     }
 
     // 没有缓存，异步高亮
-    if (!isThemeOnlyChange) {
+    // 流式场景下保留上一帧的高亮结果，避免 null → html 闪烁
+    // 只在首次（没有旧结果时）才清空
+    if (!isThemeOnlyChange && prevKey === null) {
       setOutput(null)
     }
     setIsLoading(true)
@@ -428,7 +430,7 @@ export function useSyntaxHighlightRef(
 
     if (cachedResult !== undefined) {
       tokensRef.current = cachedResult
-      setVersion(v => v + 1)
+      setVersion(v => v + 1) // eslint-disable-line react-hooks/set-state-in-effect -- 缓存命中时需同步通知消费者
       return
     }
 

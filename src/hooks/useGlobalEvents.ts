@@ -12,7 +12,11 @@ import { useEffect, useRef } from 'react'
 import { messageStore, childSessionStore } from '../store'
 import { activeSessionStore } from '../store/activeSessionStore'
 import { notificationStore } from '../store/notificationStore'
+import { soundStore } from '../store/soundStore'
+import { playNotificationSoundDeduped } from '../utils/notificationSoundBridge'
 import { subscribeToEvents, getSessionStatus, getPendingPermissions, getPendingQuestions } from '../api'
+import { replyPermission } from '../api/permission'
+import { autoApproveStore } from '../store/autoApproveStore'
 import type { ApiMessage, ApiPart, ApiPermissionRequest, ApiQuestionRequest, SessionStatusPayload } from '../api/types'
 import type { SessionStatusMap } from '../types/api/session'
 
@@ -246,6 +250,8 @@ export function useGlobalEvents(callbacks?: GlobalEventsCallbacks, directories?:
             const meta = activeSessionStore.getSessionMeta(error.sessionID)
             const sessionLabel = meta?.title || error.sessionID.slice(0, 8)
             notificationStore.push('error', sessionLabel, 'Session error', error.sessionID, meta?.directory)
+          } else if (soundStore.getSnapshot().currentSessionEnabled) {
+            playNotificationSoundDeduped('error')
           }
         }
         callbacksRef.current?.onSessionError?.(error.sessionID)
@@ -266,6 +272,15 @@ export function useGlobalEvents(callbacks?: GlobalEventsCallbacks, directories?:
       // ============================================
 
       onPermissionAsked: request => {
+        // Full Auto 全局模式拦截 — 所有会话的权限请求直接放行
+        if (autoApproveStore.fullAutoMode === 'global') {
+          const dir = activeSessionStore.getSessionMeta(request.sessionID)?.directory
+          replyPermission(request.id, 'once', undefined, dir).then(() => {
+            activeSessionStore.resolvePendingRequest(request.id)
+          })
+          return
+        }
+
         const meta = activeSessionStore.getSessionMeta(request.sessionID)
         const sessionLabel = meta?.title || request.sessionID.slice(0, 8)
         const desc = request.patterns?.length ? `${request.permission}: ${request.patterns[0]}` : request.permission
@@ -276,6 +291,9 @@ export function useGlobalEvents(callbacks?: GlobalEventsCallbacks, directories?:
         // Toast 通知 — 不属于当前 session family 的才弹
         if (!belongsToCurrentSession(request.sessionID)) {
           notificationStore.push('permission', `${sessionLabel} — Permission`, desc, request.sessionID, meta?.directory)
+        } else if (soundStore.getSnapshot().currentSessionEnabled) {
+          // 当前会话：如果开启了当前会话提示音
+          playNotificationSoundDeduped('permission')
         }
 
         // 回调给 UI 处理权限弹框
@@ -310,6 +328,8 @@ export function useGlobalEvents(callbacks?: GlobalEventsCallbacks, directories?:
         // Toast 通知
         if (!belongsToCurrentSession(request.sessionID)) {
           notificationStore.push('question', `${sessionLabel} — Question`, desc, request.sessionID, meta?.directory)
+        } else if (soundStore.getSnapshot().currentSessionEnabled) {
+          playNotificationSoundDeduped('question')
         }
 
         if (belongsToCurrentSession(request.sessionID)) {
@@ -352,6 +372,13 @@ export function useGlobalEvents(callbacks?: GlobalEventsCallbacks, directories?:
           const meta = activeSessionStore.getSessionMeta(data.sessionID)
           const sessionLabel = meta?.title || data.sessionID.slice(0, 8)
           notificationStore.push('completed', sessionLabel, 'Session completed', data.sessionID, meta?.directory)
+        } else if (
+          wasBusy &&
+          data.status.type === 'idle' &&
+          belongsToCurrentSession(data.sessionID) &&
+          soundStore.getSnapshot().currentSessionEnabled
+        ) {
+          playNotificationSoundDeduped('completed')
         }
 
         if (belongsToCurrentSession(data.sessionID)) {

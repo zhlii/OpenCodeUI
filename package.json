@@ -1,6 +1,6 @@
 {
   "name": "opencodeui",
-  "version": "0.2.0",
+  "version": "0.3.1",
   "description": "A third-party web frontend for OpenCode",
   "license": "GPL-3.0-only",
   "type": "module",
@@ -22,6 +22,7 @@
     "postinstall": "node scripts/copy-material-icons.mjs"
   },
   "dependencies": {
+    "@streamdown/math": "^1.0.2",
     "@tauri-apps/api": "^2.10.1",
     "@tauri-apps/plugin-dialog": "^2.6.0",
     "@tauri-apps/plugin-fs": "^2.4.5",
@@ -33,13 +34,15 @@
     "@xterm/xterm": "^6.0.0",
     "clsx": "^2.1.1",
     "diff": "^8.0.3",
+    "i18next": "^25.8.18",
+    "i18next-browser-languagedetector": "^8.2.1",
     "lucide-react": "^0.576.0",
     "motion": "^12.36.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
-    "react-markdown": "^10.1.0",
-    "remark-gfm": "^4.0.1",
-    "shiki": "^4.0.2"
+    "react-i18next": "^16.5.8",
+    "shiki": "^4.0.2",
+    "streamdown": "^2.4.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",

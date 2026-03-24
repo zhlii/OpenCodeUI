@@ -4,18 +4,34 @@
 // 支持拖拽调整高度，CSS 变量 + requestAnimationFrame 优化
 // ============================================
 
-import { memo, useState, useEffect, useCallback, useRef, useLayoutEffect, useMemo } from 'react'
-import { CloseIcon, RetryIcon, ChevronRightIcon } from './Icons'
+import { memo, useState, useEffect, useCallback, useRef, useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
+import { RetryIcon, ChevronRightIcon } from './Icons'
 import { getMaterialIconUrl } from '../utils/materialIcons'
 import { DiffViewer, type ViewMode } from './DiffViewer'
 import { getSessionDiff } from '../api/session'
 import type { FileDiff } from '../api/types'
 import { detectLanguage } from '../utils/languageUtils'
 import { sessionErrorHandler } from '../utils'
+import { PreviewTabsBar, type PreviewTabsBarItem } from './PreviewTabsBar'
+import { useVerticalSplitResize } from '../hooks/useVerticalSplitResize'
 
 // 常量
 const MIN_LIST_HEIGHT = 80
 const MIN_PREVIEW_HEIGHT = 120
+
+function reconcileDiffPreviewState(diffs: FileDiff[], openFiles: string[], activeFile: string | null) {
+  const availableFiles = new Set(diffs.map(diff => diff.file))
+  const nextOpenFiles = openFiles.filter(file => availableFiles.has(file))
+
+  if (nextOpenFiles.length === 0 && diffs.length > 0) {
+    nextOpenFiles.push(diffs[0].file)
+  }
+
+  const nextActiveFile = activeFile && nextOpenFiles.includes(activeFile) ? activeFile : (nextOpenFiles[0] ?? null)
+
+  return { nextOpenFiles, nextActiveFile }
+}
 
 interface SessionChangesPanelProps {
   sessionId: string
@@ -26,8 +42,22 @@ export const SessionChangesPanel = memo(function SessionChangesPanel({
   sessionId,
   isResizing: isPanelResizing = false,
 }: SessionChangesPanelProps) {
+  const { t } = useTranslation(['components', 'common'])
   const containerRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  const {
+    splitHeight: listHeight,
+    isResizing,
+    resetSplitHeight,
+    handleResizeStart,
+    handleTouchResizeStart,
+  } = useVerticalSplitResize({
+    containerRef,
+    primaryRef: listRef,
+    cssVariableName: '--list-height',
+    minPrimaryHeight: MIN_LIST_HEIGHT,
+    minSecondaryHeight: MIN_PREVIEW_HEIGHT,
+  })
 
   const [loading, setLoading] = useState(false)
   const [diffs, setDiffs] = useState<FileDiff[]>([])
@@ -37,26 +67,24 @@ export const SessionChangesPanel = memo(function SessionChangesPanel({
 
   // 选中的文件（显示在预览区）
   const [selectedFile, setSelectedFile] = useState<string | null>(null)
+  const [openDiffFiles, setOpenDiffFiles] = useState<string[]>([])
 
   // 展开的目录
   const [expandedDirs, setExpandedDirs] = useState<Set<string>>(new Set())
 
-  // 内部拖拽 resize
-  const [listHeight, setListHeight] = useState<number | null>(null)
-  const [isResizing, setIsResizing] = useState(false)
-  const rafRef = useRef<number>(0)
-  const currentHeightRef = useRef<number | null>(null)
   const requestIdRef = useRef(0)
+  const openDiffFilesRef = useRef<string[]>([])
+  const selectedFileRef = useRef<string | null>(null)
 
   const isAnyResizing = isPanelResizing || isResizing
 
-  // 同步高度到 CSS 变量
-  useLayoutEffect(() => {
-    if (!isResizing && listRef.current && listHeight !== null) {
-      listRef.current.style.setProperty('--list-height', `${listHeight}px`)
-      currentHeightRef.current = listHeight
-    }
-  }, [listHeight, isResizing])
+  useEffect(() => {
+    openDiffFilesRef.current = openDiffFiles
+  }, [openDiffFiles])
+
+  useEffect(() => {
+    selectedFileRef.current = selectedFile
+  }, [selectedFile])
 
   // 加载数据
   useEffect(() => {
@@ -74,12 +102,18 @@ export const SessionChangesPanel = memo(function SessionChangesPanel({
 
           setDiffs(data)
           setExpandedDirs(prev => (prev.size === 0 ? collectExpandedDirPaths(buildChangesTree(data)) : prev))
-          setSelectedFile(data.length > 0 ? data[0].file : null)
+          const { nextOpenFiles, nextActiveFile } = reconcileDiffPreviewState(
+            data,
+            openDiffFilesRef.current,
+            selectedFileRef.current,
+          )
+          setOpenDiffFiles(nextOpenFiles)
+          setSelectedFile(nextActiveFile)
         })
         .catch(err => {
           if (cancelled || requestId !== requestIdRef.current) return
           sessionErrorHandler('load session diff', err)
-          setError('Failed to load changes')
+          setError(t('sessionChanges.failedToLoad'))
         })
         .finally(() => {
           if (!cancelled && requestId === requestIdRef.current) {
@@ -92,7 +126,7 @@ export const SessionChangesPanel = memo(function SessionChangesPanel({
       cancelled = true
       clearTimeout(timer)
     }
-  }, [sessionId])
+  }, [sessionId, t])
 
   // 刷新
   const handleRefresh = useCallback(() => {
@@ -102,22 +136,25 @@ export const SessionChangesPanel = memo(function SessionChangesPanel({
       getSessionDiff(sessionId)
         .then(data => {
           setDiffs(data)
-          // 保持选中状态，如果选中的文件不在新数据中则选第一个
-          setSelectedFile(prev => {
-            if (prev && data.some(d => d.file === prev)) return prev
-            return data.length > 0 ? data[0].file : null
-          })
+          const { nextOpenFiles, nextActiveFile } = reconcileDiffPreviewState(
+            data,
+            openDiffFilesRef.current,
+            selectedFileRef.current,
+          )
+          setOpenDiffFiles(nextOpenFiles)
+          setSelectedFile(nextActiveFile)
         })
         .catch(err => {
           sessionErrorHandler('load session diff', err)
-          setError('Failed to load changes')
+          setError(t('sessionChanges.failedToLoad'))
         })
         .finally(() => setLoading(false))
     }
-  }, [sessionId])
+  }, [sessionId, t])
 
   // 选中文件
   const handleSelectFile = useCallback((file: string) => {
+    setOpenDiffFiles(prev => (prev.includes(file) ? prev : [...prev, file]))
     setSelectedFile(prev => (prev === file ? prev : file))
   }, [])
 
@@ -139,97 +176,55 @@ export const SessionChangesPanel = memo(function SessionChangesPanel({
 
   // 关闭预览
   const handleClosePreview = useCallback(() => {
+    setOpenDiffFiles([])
     setSelectedFile(null)
-    setListHeight(null)
-    currentHeightRef.current = null
+    resetSplitHeight()
+  }, [resetSplitHeight])
+
+  const handleActivatePreview = useCallback((file: string) => {
+    setSelectedFile(prev => (prev === file ? prev : file))
   }, [])
 
-  // 鼠标拖拽调整高度
-  const handleResizeStart = useCallback((e: React.MouseEvent) => {
-    e.preventDefault()
-    const container = containerRef.current
-    const listEl = listRef.current
-    if (!container || !listEl) return
+  const handleClosePreviewTab = useCallback((file: string) => {
+    setOpenDiffFiles(prev => {
+      const index = prev.indexOf(file)
+      if (index === -1) return prev
 
-    setIsResizing(true)
-    const containerRect = container.getBoundingClientRect()
-    const startY = e.clientY
-    const startHeight = currentHeightRef.current ?? containerRect.height * 0.4
-
-    const handleMouseMove = (moveEvent: MouseEvent) => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current)
-      rafRef.current = requestAnimationFrame(() => {
-        const deltaY = moveEvent.clientY - startY
-        const newHeight = startHeight + deltaY
-        const maxHeight = containerRect.height - MIN_PREVIEW_HEIGHT
-        const clampedHeight = Math.min(Math.max(newHeight, MIN_LIST_HEIGHT), maxHeight)
-        listEl.style.setProperty('--list-height', `${clampedHeight}px`)
-        currentHeightRef.current = clampedHeight
+      const next = prev.filter(item => item !== file)
+      setSelectedFile(current => {
+        if (current !== file) return current
+        return next[Math.min(index, next.length - 1)] ?? null
       })
-    }
-
-    const handleMouseUp = () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current)
-      setIsResizing(false)
-      document.body.style.cursor = ''
-      document.body.style.userSelect = ''
-      document.removeEventListener('mousemove', handleMouseMove)
-      document.removeEventListener('mouseup', handleMouseUp)
-      if (currentHeightRef.current !== null) {
-        setListHeight(currentHeightRef.current)
-      }
-    }
-
-    document.body.style.cursor = 'row-resize'
-    document.body.style.userSelect = 'none'
-    document.addEventListener('mousemove', handleMouseMove)
-    document.addEventListener('mouseup', handleMouseUp)
+      return next
+    })
   }, [])
 
-  // 触摸拖拽调整高度
-  const handleTouchResizeStart = useCallback((e: React.TouchEvent) => {
-    const container = containerRef.current
-    const listEl = listRef.current
-    if (!container || !listEl) return
+  const handleReorderPreviewTabs = useCallback((draggedFile: string, targetFile: string) => {
+    setOpenDiffFiles(prev => {
+      const draggedIndex = prev.indexOf(draggedFile)
+      const targetIndex = prev.indexOf(targetFile)
+      if (draggedIndex === -1 || targetIndex === -1 || draggedIndex === targetIndex) return prev
 
-    setIsResizing(true)
-    const containerRect = container.getBoundingClientRect()
-    const startY = e.touches[0].clientY
-    const startHeight = currentHeightRef.current ?? containerRect.height * 0.4
-
-    const handleTouchMove = (moveEvent: TouchEvent) => {
-      moveEvent.preventDefault()
-      if (rafRef.current) cancelAnimationFrame(rafRef.current)
-      rafRef.current = requestAnimationFrame(() => {
-        const deltaY = moveEvent.touches[0].clientY - startY
-        const newHeight = startHeight + deltaY
-        const maxHeight = containerRect.height - MIN_PREVIEW_HEIGHT
-        const clampedHeight = Math.min(Math.max(newHeight, MIN_LIST_HEIGHT), maxHeight)
-        listEl.style.setProperty('--list-height', `${clampedHeight}px`)
-        currentHeightRef.current = clampedHeight
-      })
-    }
-
-    const handleTouchEnd = () => {
-      if (rafRef.current) cancelAnimationFrame(rafRef.current)
-      setIsResizing(false)
-      document.removeEventListener('touchmove', handleTouchMove)
-      document.removeEventListener('touchend', handleTouchEnd)
-      if (currentHeightRef.current !== null) {
-        setListHeight(currentHeightRef.current)
-      }
-    }
-
-    document.addEventListener('touchmove', handleTouchMove, { passive: false })
-    document.addEventListener('touchend', handleTouchEnd)
+      const next = [...prev]
+      const [dragged] = next.splice(draggedIndex, 1)
+      next.splice(targetIndex, 0, dragged)
+      return next
+    })
   }, [])
 
   // 获取选中的 diff 数据
   const selectedDiff = selectedFile ? diffs.find(d => d.file === selectedFile) : null
+  const previewDiffs = useMemo(
+    () =>
+      openDiffFiles
+        .map(file => diffs.find(diff => diff.file === file))
+        .filter((diff): diff is FileDiff => Boolean(diff)),
+    [diffs, openDiffFiles],
+  )
   const showPreview = selectedDiff !== null
 
   if (loading) {
-    return <div className="p-4 text-center text-text-400 text-xs">Loading changes...</div>
+    return <div className="p-4 text-center text-text-400 text-xs">{t('sessionChanges.loadingChanges')}</div>
   }
 
   if (error) {
@@ -237,7 +232,7 @@ export const SessionChangesPanel = memo(function SessionChangesPanel({
   }
 
   if (diffs.length === 0) {
-    return <div className="p-4 text-center text-text-400 text-xs">No changes in this session</div>
+    return <div className="p-4 text-center text-text-400 text-xs">{t('sessionChanges.noChanges')}</div>
   }
 
   // 总统计
@@ -267,7 +262,7 @@ export const SessionChangesPanel = memo(function SessionChangesPanel({
         <div className="flex items-center justify-between px-3 py-1.5 border-b border-border-100 bg-bg-100/30 shrink-0">
           <div className="flex items-center gap-3">
             <span className="text-[10px] text-text-400 uppercase tracking-wider font-bold">
-              {diffs.length} file{diffs.length !== 1 ? 's' : ''}
+              {t('sessionChanges.fileCount', { count: diffs.length })}
             </span>
             <div className="flex items-center gap-2 text-[10px] font-mono">
               <span className="text-success-100">+{totalStats.additions}</span>
@@ -283,18 +278,18 @@ export const SessionChangesPanel = memo(function SessionChangesPanel({
                 className={`px-2 py-0.5 text-[10px] transition-colors ${
                   listMode === 'flat' ? 'bg-bg-000 text-text-100 shadow-sm' : 'text-text-400 hover:text-text-200'
                 }`}
-                title="Flat list"
+                title={t('sessionChanges.flatList')}
               >
-                List
+                {t('sessionChanges.list')}
               </button>
               <button
                 onClick={() => setListMode('tree')}
                 className={`px-2 py-0.5 text-[10px] transition-colors ${
                   listMode === 'tree' ? 'bg-bg-000 text-text-100 shadow-sm' : 'text-text-400 hover:text-text-200'
                 }`}
-                title="Tree view"
+                title={t('sessionChanges.treeView')}
               >
-                Tree
+                {t('sessionChanges.tree')}
               </button>
             </div>
 
@@ -306,7 +301,7 @@ export const SessionChangesPanel = memo(function SessionChangesPanel({
                   viewMode === 'unified' ? 'bg-bg-000 text-text-100 shadow-sm' : 'text-text-400 hover:text-text-200'
                 }`}
               >
-                Unified
+                {t('sessionChanges.unified')}
               </button>
               <button
                 onClick={() => setViewMode('split')}
@@ -314,7 +309,7 @@ export const SessionChangesPanel = memo(function SessionChangesPanel({
                   viewMode === 'split' ? 'bg-bg-000 text-text-100 shadow-sm' : 'text-text-400 hover:text-text-200'
                 }`}
               >
-                Split
+                {t('sessionChanges.split')}
               </button>
             </div>
 
@@ -323,7 +318,7 @@ export const SessionChangesPanel = memo(function SessionChangesPanel({
               onClick={handleRefresh}
               disabled={loading}
               className="p-1 text-text-400 hover:text-text-100 hover:bg-bg-200 rounded transition-colors disabled:opacity-50"
-              title="Refresh"
+              title={t('common:refresh')}
             >
               <RetryIcon size={12} className={loading ? 'animate-spin' : ''} />
             </button>
@@ -340,7 +335,6 @@ export const SessionChangesPanel = memo(function SessionChangesPanel({
                     key={node.path}
                     node={node}
                     depth={0}
-                    selectedFile={selectedFile}
                     expandedDirs={expandedDirs}
                     onSelectFile={handleSelectFile}
                     onToggleDir={handleToggleDir}
@@ -348,7 +342,6 @@ export const SessionChangesPanel = memo(function SessionChangesPanel({
                 ))
               : // Flat list view
                 diffs.map(diff => {
-                  const isSelected = selectedFile === diff.file
                   const fileStatus = getFileStatus(diff)
 
                   return (
@@ -356,10 +349,10 @@ export const SessionChangesPanel = memo(function SessionChangesPanel({
                       key={diff.file}
                       onClick={() => handleSelectFile(diff.file)}
                       className={`
-                      w-full min-w-0 flex items-center gap-2 px-3 py-1 text-left
-                      hover:bg-bg-200/50 transition-colors text-[12px]
-                      ${isSelected ? 'bg-bg-200/70 text-text-100' : 'text-text-300'}
-                    `}
+                       w-full min-w-0 flex items-center gap-2 px-3 py-1 text-left
+                       hover:bg-bg-200/50 transition-colors text-[12px]
+                       text-text-300
+                     `}
                     >
                       <img
                         src={getMaterialIconUrl(diff.file, 'file')}
@@ -387,14 +380,13 @@ export const SessionChangesPanel = memo(function SessionChangesPanel({
         </div>
       </div>
 
-      {/* Resize Handle - 扩大拖拽区域，支持触摸 */}
+      {/* Resize Handle - 与标签栏同色 */}
       {showPreview && (
         <div
           className={`
-            h-2.5 cursor-row-resize shrink-0 relative
+            h-1.5 cursor-row-resize shrink-0 relative
             hover:bg-accent-main-100/50 active:bg-accent-main-100 transition-colors
-            border-t border-border-200
-            ${isResizing ? 'bg-accent-main-100' : 'bg-transparent'}
+            ${isResizing ? 'bg-accent-main-100' : 'bg-bg-200/60'}
           `}
           onMouseDown={handleResizeStart}
           onTouchStart={handleTouchResizeStart}
@@ -406,8 +398,12 @@ export const SessionChangesPanel = memo(function SessionChangesPanel({
         <div className="flex-1 flex flex-col min-h-0" style={{ minHeight: MIN_PREVIEW_HEIGHT }}>
           <DiffPreviewPanel
             diff={selectedDiff}
+            previewDiffs={previewDiffs}
             viewMode={viewMode}
             isResizing={isAnyResizing}
+            onActivatePreview={handleActivatePreview}
+            onClosePreview={handleClosePreviewTab}
+            onReorderPreview={handleReorderPreviewTabs}
             onClose={handleClosePreview}
           />
         </div>
@@ -422,48 +418,65 @@ export const SessionChangesPanel = memo(function SessionChangesPanel({
 
 interface DiffPreviewPanelProps {
   diff: FileDiff
+  previewDiffs: FileDiff[]
   viewMode: ViewMode
   isResizing: boolean
+  onActivatePreview: (file: string) => void
+  onClosePreview: (file: string) => void
+  onReorderPreview: (draggedFile: string, targetFile: string) => void
   onClose: () => void
 }
 
 const DiffPreviewPanel = memo(function DiffPreviewPanel({
   diff,
+  previewDiffs,
   viewMode,
   isResizing,
+  onActivatePreview,
+  onClosePreview,
+  onReorderPreview,
   onClose,
 }: DiffPreviewPanelProps) {
   const language = detectLanguage(diff.file) || 'text'
-  const fileName = diff.file.split(/[/\\]/).pop() || diff.file
+  const { t } = useTranslation(['components', 'common'])
+  const previewTabItems = useMemo<PreviewTabsBarItem[]>(
+    () =>
+      previewDiffs.map(previewDiff => {
+        const currentFileName = previewDiff.file.split(/[/\\]/).pop() || previewDiff.file
+
+        return {
+          id: previewDiff.file,
+          title: previewDiff.file,
+          closeTitle: `${t('common:close')} ${currentFileName}`,
+          iconPath: previewDiff.file,
+          label: (
+            <>
+              <span className="block min-w-0 flex-1 truncate text-[11px] font-mono">{currentFileName}</span>
+              <span className="shrink-0 text-[10px] font-mono text-success-100/90">
+                {previewDiff.additions > 0 ? `+${previewDiff.additions}` : ''}
+              </span>
+              <span className="shrink-0 text-[10px] font-mono text-danger-100/90">
+                {previewDiff.deletions > 0 ? `-${previewDiff.deletions}` : ''}
+              </span>
+            </>
+          ),
+        }
+      }),
+    [previewDiffs, t],
+  )
 
   return (
     <div className="flex flex-col h-full">
-      {/* Preview Header */}
-      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border-100/50 bg-bg-100/30 shrink-0">
-        <div className="flex items-center gap-2 min-w-0 flex-1">
-          <img
-            src={getMaterialIconUrl(diff.file, 'file')}
-            alt=""
-            width={14}
-            height={14}
-            className="shrink-0"
-            onError={e => {
-              e.currentTarget.style.visibility = 'hidden'
-            }}
-          />
-          <span className="text-[11px] font-mono text-text-200 truncate flex-1 min-w-0">{fileName}</span>
-          <div className="flex items-center gap-2 text-[10px] font-mono shrink-0">
-            {diff.additions > 0 && <span className="text-success-100">+{diff.additions}</span>}
-            {diff.deletions > 0 && <span className="text-danger-100">-{diff.deletions}</span>}
-          </div>
-        </div>
-        <button
-          onClick={onClose}
-          className="p-1 text-text-400 hover:text-text-100 hover:bg-bg-200 rounded transition-colors shrink-0"
-        >
-          <CloseIcon size={12} />
-        </button>
-      </div>
+      <PreviewTabsBar
+        items={previewTabItems}
+        activeId={diff.file}
+        closeAllTitle={t('common:closeAllTabs')}
+        onActivate={onActivatePreview}
+        onClose={onClosePreview}
+        onCloseAll={onClose}
+        onReorder={onReorderPreview}
+        tabWidthClassName="w-44 max-w-44"
+      />
 
       {/* Diff Content - DiffViewer 自带滚动 */}
       <div className="flex-1 min-h-0">
@@ -607,7 +620,6 @@ function collectExpandedDirPaths(nodes: ChangesTreeNode[]): Set<string> {
 interface ChangesTreeItemProps {
   node: ChangesTreeNode
   depth: number
-  selectedFile: string | null
   expandedDirs: Set<string>
   onSelectFile: (path: string) => void
   onToggleDir: (path: string) => void
@@ -616,13 +628,11 @@ interface ChangesTreeItemProps {
 const ChangesTreeItem = memo(function ChangesTreeItem({
   node,
   depth,
-  selectedFile,
   expandedDirs,
   onSelectFile,
   onToggleDir,
 }: ChangesTreeItemProps) {
   const isExpanded = expandedDirs.has(node.path)
-  const isSelected = node.type === 'file' && selectedFile === node.diff?.file
   const paddingLeft = 8 + depth * 16
 
   // 状态颜色
@@ -661,7 +671,6 @@ const ChangesTreeItem = memo(function ChangesTreeItem({
               key={child.path}
               node={child}
               depth={depth + 1}
-              selectedFile={selectedFile}
               expandedDirs={expandedDirs}
               onSelectFile={onSelectFile}
               onToggleDir={onToggleDir}
@@ -676,10 +685,10 @@ const ChangesTreeItem = memo(function ChangesTreeItem({
     <button
       onClick={() => node.diff && onSelectFile(node.diff.file)}
       className={`
-        w-full min-w-0 flex items-center gap-1.5 py-1 transition-colors text-[12px]
-        hover:bg-bg-200/50
-        ${isSelected ? 'bg-bg-200/70 text-text-100' : 'text-text-300'}
-      `}
+         w-full min-w-0 flex items-center gap-1.5 py-1 transition-colors text-[12px]
+         hover:bg-bg-200/50
+         text-text-300
+       `}
       style={{ paddingLeft: paddingLeft + 16 }}
     >
       <img

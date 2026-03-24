@@ -1,5 +1,13 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { getSessions, createSession, deleteSession, type ApiSession, type SessionListParams } from '../api'
+import {
+  getSessions,
+  createSession,
+  deleteSession,
+  subscribeToEvents,
+  type ApiSession,
+  type SessionListParams,
+} from '../api'
+import { autoDetectPathStyle, isSameDirectory } from '../utils'
 
 interface UseSessionsOptions {
   /** 每页数量 */
@@ -54,8 +62,25 @@ export function useSessions(options: UseSessionsOptions = {}): UseSessionsResult
   const requestIdRef = useRef(0)
   // 防抖 timer
   const searchTimerRef = useRef<number | null>(null)
+  // 当前 limit，loadMore 时递增（与 SessionContext 保持一致）
+  const currentLimitRef = useRef(pageSize)
+  const searchRef = useRef(search)
+  const fetchSessionsRef = useRef<(params?: SessionListParams & { append?: boolean }) => Promise<void>>(() =>
+    Promise.resolve(),
+  )
+
+  useEffect(() => {
+    searchRef.current = search
+  }, [search])
+
+  const matchesDirectory = useCallback(
+    (session: ApiSession) => !normalizedDirectory || isSameDirectory(normalizedDirectory, session.directory),
+    [normalizedDirectory],
+  )
 
   // 获取会话列表
+  // append 仅用于控制 loading 状态：true 时用 isLoadingMore，false 时用 isLoading
+  // 数据始终全量替换（递增 limit 策略）
   const fetchSessions = useCallback(
     async (params: SessionListParams & { append?: boolean } = {}) => {
       if (!enabled) return
@@ -73,7 +98,7 @@ export function useSessions(options: UseSessionsOptions = {}): UseSessionsResult
       try {
         const data = await getSessions({
           roots: rootsOnly,
-          limit: pageSize,
+          limit: currentLimitRef.current,
           directory: normalizedDirectory,
           ...queryParams,
         })
@@ -81,14 +106,12 @@ export function useSessions(options: UseSessionsOptions = {}): UseSessionsResult
         // 检查是否是最新的请求
         if (requestId !== requestIdRef.current) return
 
-        if (append) {
-          setSessions(prev => [...prev, ...data])
-        } else {
-          setSessions(data)
+        if (data.length > 0 && data[0].directory) {
+          autoDetectPathStyle(data[0].directory)
         }
 
-        // 如果返回的数量小于 pageSize，说明没有更多了
-        setHasMore(data.length >= pageSize)
+        setSessions(data)
+        setHasMore(data.length >= currentLimitRef.current)
       } catch (e) {
         if (requestId !== requestIdRef.current) return
         setError(e instanceof Error ? e : new Error('Failed to fetch sessions'))
@@ -99,8 +122,10 @@ export function useSessions(options: UseSessionsOptions = {}): UseSessionsResult
         }
       }
     },
-    [pageSize, rootsOnly, normalizedDirectory, enabled],
+    [rootsOnly, normalizedDirectory, enabled],
   )
+
+  fetchSessionsRef.current = fetchSessions
 
   // 初始加载和搜索变化时重新加载
   useEffect(() => {
@@ -109,6 +134,9 @@ export function useSessions(options: UseSessionsOptions = {}): UseSessionsResult
       setIsLoadingMore(false)
       return
     }
+
+    // 搜索或 enabled 变化时重置 limit
+    currentLimitRef.current = pageSize
 
     // 防抖处理搜索
     if (searchTimerRef.current) {
@@ -127,22 +155,75 @@ export function useSessions(options: UseSessionsOptions = {}): UseSessionsResult
         clearTimeout(searchTimerRef.current)
       }
     }
-  }, [search, fetchSessions, enabled])
+  }, [search, fetchSessions, enabled, pageSize])
 
-  // 加载更多
+  useEffect(() => {
+    if (!enabled) return
+
+    const unsubscribe = subscribeToEvents({
+      onSessionCreated: session => {
+        if (session.parentID) return
+        if (!matchesDirectory(session)) return
+
+        if (searchRef.current) {
+          void fetchSessionsRef.current({ search: searchRef.current || undefined })
+          return
+        }
+
+        setSessions(prev => {
+          if (prev.some(item => item.id === session.id)) return prev
+          return [session, ...prev]
+        })
+      },
+      onSessionUpdated: session => {
+        if (session.parentID) return
+
+        if (searchRef.current) {
+          if (matchesDirectory(session)) {
+            void fetchSessionsRef.current({ search: searchRef.current || undefined })
+          } else {
+            setSessions(prev => prev.filter(item => item.id !== session.id))
+          }
+          return
+        }
+
+        setSessions(prev => {
+          const index = prev.findIndex(item => item.id === session.id)
+
+          if (!matchesDirectory(session)) {
+            return index === -1 ? prev : prev.filter(item => item.id !== session.id)
+          }
+
+          if (index === -1) {
+            return [session, ...prev]
+          }
+
+          const updated = prev.filter(item => item.id !== session.id)
+          return [session, ...updated]
+        })
+      },
+      onSessionDeleted: sessionId => {
+        setSessions(prev => prev.filter(item => item.id !== sessionId))
+      },
+      onReconnected: () => {
+        setSessions([])
+        void fetchSessionsRef.current({ search: searchRef.current || undefined })
+      },
+    })
+
+    return unsubscribe
+  }, [enabled, matchesDirectory])
+
+  // 加载更多：递增 limit 重新拉取完整列表（与 SessionContext 一致）
   const loadMore = useCallback(async () => {
     if (!enabled || isLoadingMore || !hasMore || sessions.length === 0) return
 
-    // 使用最后一个 session 的更新时间作为游标
-    const lastSession = sessions[sessions.length - 1]
-    const startTime = lastSession.time.updated
-
+    currentLimitRef.current += pageSize
     await fetchSessions({
       search: search || undefined,
-      start: startTime,
       append: true,
     })
-  }, [sessions, search, hasMore, isLoadingMore, fetchSessions, enabled])
+  }, [sessions, search, hasMore, isLoadingMore, fetchSessions, enabled, pageSize])
 
   // 刷新
   const refresh = useCallback(async () => {
@@ -158,8 +239,16 @@ export function useSessions(options: UseSessionsOptions = {}): UseSessionsResult
         title,
         directory: normalizedDirectory,
       })
-      // 添加到列表开头
-      setSessions(prev => [newSession, ...prev])
+
+      if (searchRef.current) {
+        void fetchSessionsRef.current({ search: searchRef.current || undefined })
+      } else {
+        setSessions(prev => {
+          if (prev.some(session => session.id === newSession.id)) return prev
+          return [newSession, ...prev]
+        })
+      }
+
       return newSession
     },
     [normalizedDirectory],

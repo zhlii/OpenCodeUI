@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useState, useEffect } from 'react'
+import { useTranslation } from 'react-i18next'
 import { SessionList } from '../../sessions'
 import { ActiveSessionItem } from './ActiveSessionItem'
 import { NotificationItem } from './NotificationItem'
@@ -22,7 +23,6 @@ import {
   type ConnectionInfo,
 } from '../../../api'
 import { uiErrorHandler } from '../../../utils'
-import { APP_NAME } from '../../../constants'
 
 // 侧边栏设计模式：
 // - 按钮结构统一，不因 expanded/collapsed 改变 DOM
@@ -53,6 +53,7 @@ export function SidePanel({
   contextLimit = 200000,
   onOpenSettings,
 }: SidePanelProps) {
+  const { t } = useTranslation(['chat', 'common'])
   const { currentDirectory, addDirectory } = useDirectory()
   const [connectionState, setConnectionState] = useState<ConnectionInfo | null>(null)
   const [sidebarTab, setSidebarTab] = useState<'recents' | 'active'>('recents')
@@ -198,7 +199,7 @@ export function SidePanel({
           }}
         >
           <a href="/" className="flex items-center whitespace-nowrap">
-            <span className="text-base font-semibold text-text-100 tracking-tight">{APP_NAME}</span>
+            <span className="text-base font-semibold text-text-100 tracking-tight">{t('header.openCode')}</span>
           </a>
         </div>
 
@@ -209,7 +210,7 @@ export function SidePanel({
         >
           <button
             onClick={onToggleSidebar}
-            aria-label={isExpanded ? 'Collapse sidebar' : 'Expand sidebar'}
+            aria-label={isExpanded ? t('sidebar.collapseSidebar') : t('sidebar.expandSidebar')}
             className="h-8 w-8 flex items-center justify-center rounded-lg text-text-400 hover:text-text-100 hover:bg-bg-200 active:scale-[0.98] transition-all duration-200"
           >
             <SidebarIcon size={18} />
@@ -228,7 +229,7 @@ export function SidePanel({
             paddingLeft: 6,
             paddingRight: 6,
           }}
-          title="New chat"
+          title={t('sidebar.newChat')}
         >
           <span className="size-5 flex items-center justify-center shrink-0">
             <PlusIcon size={16} />
@@ -237,7 +238,7 @@ export function SidePanel({
             className="ml-2 text-sm whitespace-nowrap transition-opacity duration-300"
             style={{ opacity: showLabels ? 1 : 0 }}
           >
-            New chat
+            {t('sidebar.newChat')}
           </span>
           <span
             className="ml-auto text-[10px] text-text-500 opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap"
@@ -246,55 +247,56 @@ export function SidePanel({
             {newChatShortcut}
           </span>
         </button>
-      </div>
+      </div >
 
       {/* ===== Main Content ===== */}
-      <div
+      < div
         className="flex-1 flex flex-col min-h-0 overflow-hidden transition-all duration-300 ease-out"
         style={{
           opacity: showLabels ? 1 : 0,
           visibility: showLabels ? 'visible' : 'hidden',
-        }}
+        }
+        }
       >
         {/* Search */}
-        <div className="px-3 py-2 mt-2">
+        < div className="px-3 py-2 mt-2" >
           <div className="relative group">
             <SearchIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-400 w-3.5 h-3.5 group-focus-within:text-accent-main-100 transition-colors" />
             <input
               type="text"
               value={search}
               onChange={e => setSearch(e.target.value)}
-              placeholder="Search chats..."
+              placeholder={t('sidebar.searchChats')}
               className="w-full bg-bg-200/40 hover:bg-bg-200/60 focus:bg-bg-000 border border-transparent focus:border-border-200 rounded-lg py-1.5 pl-8 pr-8 text-xs text-text-100 placeholder:text-text-400/70 focus:outline-none transition-all"
             />
             {search && (
               <button
                 onClick={() => setSearch('')}
                 className="absolute right-2 top-1/2 -translate-y-1/2 text-text-400 hover:text-text-100 text-sm"
-                aria-label="Clear search"
+                aria-label={t('sidebar.clearSearch')}
               >
                 ×
               </button>
             )}
           </div>
-        </div>
+        </div >
 
         {/* Tab Bar: Recents / Active */}
-        <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+        < div className="flex-1 flex flex-col min-h-0 overflow-hidden" >
           <div className="flex items-center px-3 gap-1 shrink-0">
             <button
               onClick={() => setSidebarTab('recents')}
               className={`px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider transition-colors duration-150 ${sidebarTab === 'recents' ? 'text-text-100' : 'text-text-500 hover:text-text-300'
                 }`}
             >
-              Recents
+              {t('sidebar.recents')}
             </button>
             <button
               onClick={() => setSidebarTab('active')}
               className={`px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider transition-colors duration-150 flex items-center gap-1.5 ${sidebarTab === 'active' ? 'text-text-100' : 'text-text-500 hover:text-text-300'
                 }`}
             >
-              Active
+              {t('sidebar.active')}
               {attentionCount > 0 && (
                 <span
                   className={`inline-flex items-center justify-center min-w-[16px] h-4 px-1 text-[10px] font-bold rounded-full ${attentionCount > busyCount
@@ -309,97 +311,101 @@ export function SidePanel({
           </div>
 
           {/* Recents Tab */}
-          {sidebarTab === 'recents' && (
-            <div className="flex-1 overflow-hidden">
-              <SessionList
-                sessions={sessions}
-                selectedId={selectedSessionId}
-                isLoading={isLoading}
-                isLoadingMore={isLoadingMore}
-                hasMore={hasMore}
-                search={search}
-                onSearchChange={setSearch}
-                onSelect={handleSelect}
-                onDelete={handleDeleteSession}
-                onRename={handleRename}
-                onLoadMore={loadMore}
-                onNewChat={onNewSession}
-                showHeader={false}
-                grouped={false}
-                density="compact"
-                showStats
-              />
-            </div>
-          )}
+          {
+            sidebarTab === 'recents' && (
+              <div className="flex-1 overflow-hidden">
+                <SessionList
+                  sessions={sessions}
+                  selectedId={selectedSessionId}
+                  isLoading={isLoading}
+                  isLoadingMore={isLoadingMore}
+                  hasMore={hasMore}
+                  search={search}
+                  onSearchChange={setSearch}
+                  onSelect={handleSelect}
+                  onDelete={handleDeleteSession}
+                  onRename={handleRename}
+                  onLoadMore={loadMore}
+                  onNewChat={onNewSession}
+                  showHeader={false}
+                  grouped={false}
+                  density="compact"
+                  showStats
+                />
+              </div >
+            )
+          }
 
           {/* Active Sessions Tab */}
-          {sidebarTab === 'active' && (
-            <div className="flex-1 overflow-hidden mt-1">
-              {busySessions.length === 0 && notifications.length === 0 ? (
-                <div className="flex flex-col items-center justify-center py-12 text-text-400 opacity-60">
-                  <p className="text-xs">No active sessions</p>
-                </div>
-              ) : (
-                <div className="space-y-2 overflow-y-auto custom-scrollbar px-2">
-                  {/* Busy sessions */}
-                  {busySessions.map(entry => {
-                    const resolvedSession = sessionLookup.get(entry.sessionId)
-                    return (
-                      <ActiveSessionItem
-                        key={entry.sessionId}
-                        entry={entry}
-                        resolvedSession={resolvedSession}
-                        isSelected={entry.sessionId === selectedSessionId}
-                        onSelect={handleSelectActive}
-                      />
-                    )
-                  })}
+          {
+            sidebarTab === 'active' && (
+              <div className="flex-1 overflow-hidden mt-1">
+                {busySessions.length === 0 && notifications.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-12 text-text-400 opacity-60">
+                    <p className="text-xs">{t('sidebar.noActiveSessions')}</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2 overflow-y-auto custom-scrollbar px-2">
+                    {/* Busy sessions */}
+                    {busySessions.map(entry => {
+                      const resolvedSession = sessionLookup.get(entry.sessionId)
+                      return (
+                        <ActiveSessionItem
+                          key={entry.sessionId}
+                          entry={entry}
+                          resolvedSession={resolvedSession}
+                          isSelected={entry.sessionId === selectedSessionId}
+                          onSelect={handleSelectActive}
+                        />
+                      )
+                    })}
 
-                  {/* Divider + actions between busy and notifications */}
-                  {notifications.length > 0 && (
-                    <div
-                      className={`flex items-center justify-between gap-2 ${busySessions.length > 0 ? 'mt-2 pt-2 border-t border-border-200/30' : ''}`}
-                    >
-                      <span className="text-[10px] font-medium text-text-400 uppercase tracking-wider pl-1">
-                        Notifications
-                      </span>
-                      <div className="flex items-center gap-0.5">
-                        {notifications.some((n: NotificationEntry) => !n.read) && (
+                    {/* Divider + actions between busy and notifications */}
+                    {notifications.length > 0 && (
+                      <div
+                        className={`flex items-center justify-between gap-2 ${busySessions.length > 0 ? 'mt-2 pt-2 border-t border-border-200/30' : ''}`}
+                      >
+                        <span className="text-[10px] font-medium text-text-400 uppercase tracking-wider pl-1">
+                          {t('sidebar.notifications')}
+                        </span>
+                        <div className="flex items-center gap-0.5">
+                          {notifications.some((n: NotificationEntry) => !n.read) && (
+                            <button
+                              className="text-[10px] text-text-400 hover:text-text-200 px-1.5 py-0.5 rounded-md hover:bg-bg-200 transition-all duration-150 active:scale-95"
+                              onClick={() => notificationStore.markAllRead()}
+                            >
+                              {t('sidebar.readAll')}
+                            </button>
+                          )}
                           <button
                             className="text-[10px] text-text-400 hover:text-text-200 px-1.5 py-0.5 rounded-md hover:bg-bg-200 transition-all duration-150 active:scale-95"
-                            onClick={() => notificationStore.markAllRead()}
+                            onClick={() => notificationStore.clearAll()}
                           >
-                            Read all
+                            {t('common:clear')}
                           </button>
-                        )}
-                        <button
-                          className="text-[10px] text-text-400 hover:text-text-200 px-1.5 py-0.5 rounded-md hover:bg-bg-200 transition-all duration-150 active:scale-95"
-                          onClick={() => notificationStore.clearAll()}
-                        >
-                          Clear
-                        </button>
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    )}
 
-                  {/* Notification history */}
-                  {notifications.map((entry: NotificationEntry) => {
-                    const resolvedSession = sessionLookup.get(entry.sessionId)
-                    return (
-                      <NotificationItem
-                        key={entry.id}
-                        entry={entry}
-                        resolvedSession={resolvedSession}
-                        onSelect={handleSelectActive}
-                      />
-                    )
-                  })}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      </div>
+                    {/* Notification history */}
+                    {notifications.map((entry: NotificationEntry) => {
+                      const resolvedSession = sessionLookup.get(entry.sessionId)
+                      return (
+                        <NotificationItem
+                          key={entry.id}
+                          entry={entry}
+                          resolvedSession={resolvedSession}
+                          onSelect={handleSelectActive}
+                        />
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )
+          }
+        </div >
+      </div >
 
       {/* Spacer for collapsed */}
       {!showLabels && <div className="flex-1" />}
@@ -412,6 +418,6 @@ export function SidePanel({
         hasMessages={hasMessages}
         onOpenSettings={onOpenSettings}
       />
-    </div>
+    </div >
   )
 }

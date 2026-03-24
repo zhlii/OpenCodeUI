@@ -2,10 +2,11 @@
 // ChatArea - 聊天消息显示区域
 // ============================================
 //
-// 简单的滚动容器 + overflow-y:auto
-// - IntersectionObserver 触发 loadMore
-// - useLayoutEffect 补偿 prepend 滚动偏移
-// - setInterval 在 streaming 时自动滚动到底部
+// flex-direction: column-reverse 实现原生 stick-to-bottom：
+// - scrollTop=0 是底部，负值是向上滚动
+// - 新内容向上生长，浏览器自动维持底部锚定，零 JS auto-scroll
+// - 消息反序渲染：DOM 前面=视觉底部，loadMore append 到 DOM 末尾=视觉顶部
+// - IntersectionObserver 触发 loadMore，prepend 时临时禁用 content-visibility
 
 import {
   useRef,
@@ -14,10 +15,11 @@ import {
   memo,
   useCallback,
   useEffect,
-  useLayoutEffect,
   useMemo,
   useState,
+  type ReactNode,
 } from 'react'
+import { useTranslation } from 'react-i18next'
 import { animate } from 'motion/mini'
 import { MessageRenderer } from '../message'
 import { messageStore } from '../../store'
@@ -28,14 +30,19 @@ import { buildVisibleMessageEntries } from './chatAreaVisibility'
 import { AT_BOTTOM_THRESHOLD_PX } from '../../constants'
 import { useIsMobile } from '../../hooks'
 
+const MESSAGE_RENDER_ROOT_MARGIN = '150% 0px'
+const STICKY_RENDER_MESSAGE_COUNT = 8
+
 interface ChatAreaProps {
   messages: Message[]
   sessionId?: string | null
   isStreaming?: boolean
+  allowStreamingLayoutAnimation?: boolean
   loadState?: 'idle' | 'loading' | 'loaded' | 'error'
   hasMoreHistory?: boolean
   onLoadMore?: () => void | Promise<void>
   onUndo?: (userMessageId: string) => void
+  onFork?: (message: Message) => void | Promise<void>
   canUndo?: boolean
   registerMessage?: (id: string, element: HTMLElement | null) => void
   retryStatus?: RetryStatusInlineData | null
@@ -48,7 +55,6 @@ export type ChatAreaHandle = {
   scrollToBottom: (instant?: boolean) => void
   scrollToBottomIfAtBottom: () => void
   scrollToLastMessage: () => void
-  suppressAutoScroll: (duration?: number) => void
   scrollToMessageIndex: (index: number) => void
   scrollToMessageId: (messageId: string) => void
 }
@@ -59,10 +65,12 @@ export const ChatArea = memo(
       {
         messages,
         sessionId,
-        isStreaming = false,
+        isStreaming: _isStreaming = false,
+        allowStreamingLayoutAnimation = true,
         loadState = 'idle',
         onLoadMore,
         onUndo,
+        onFork,
         canUndo,
         hasMoreHistory: _hasMoreHistory = false,
         registerMessage,
@@ -74,20 +82,21 @@ export const ChatArea = memo(
       ref,
     ) => {
       // ---- Refs ----
+      const { t } = useTranslation('chat')
       const scrollRef = useRef<HTMLDivElement>(null)
+      const [scrollRoot, setScrollRoot] = useState<HTMLDivElement | null>(null)
       const topSentinelRef = useRef<HTMLDivElement>(null)
       const isAtBottomRef = useRef(true)
-      const suppressScrollRef = useRef(false)
-      const userInteractingRef = useRef(false)
-      const userInteractingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
       const loadMoreRef = useRef(onLoadMore)
-      loadMoreRef.current = onLoadMore
+      useEffect(() => {
+        loadMoreRef.current = onLoadMore
+      }, [onLoadMore])
       const isLoadingRef = useRef(false)
-      const messagesRef = useRef<HTMLDivElement>(null)
       const [isLoadingMore, setIsLoadingMore] = useState(false)
-      // prepend 补偿用
-      const prevScrollHeightRef = useRef(0)
-      const prevFirstIdRef = useRef<string | null>(null)
+
+      // Guard: 防止 session 初始加载时 sentinel 在视口内立即触发 loadMore。
+      // 只有用户主动滚离底部后解除。
+      const loadMoreBlockedRef = useRef(true)
 
       const { isWideMode } = useTheme()
       const isMobile = useIsMobile()
@@ -99,130 +108,91 @@ export const ChatArea = memo(
 
       const turnDurationMap = useMemo(() => {
         const map = new Map<string, number>()
-        for (let i = 0; i < visibleMessages.length; i++) {
-          if (visibleMessages[i].info.role !== 'user') continue
-          const userCreated = visibleMessages[i].info.time.created
-          let lastAssistant: Message | undefined
-          for (let j = i + 1; j < visibleMessages.length && visibleMessages[j].info.role !== 'user'; j++) {
-            lastAssistant = visibleMessages[j]
+
+        type Turn = {
+          userCreated: number
+          lastCompleted?: number
+          assistantIds: Set<string>
+        }
+
+        const turns: Turn[] = []
+
+        for (let i = 0; i < messages.length; i++) {
+          const message = messages[i]
+          if (message.info.role !== 'user') continue
+
+          const turn: Turn = {
+            userCreated: message.info.time.created,
+            assistantIds: new Set<string>(),
           }
-          if (lastAssistant?.info.time.completed) {
-            map.set(lastAssistant.info.id, lastAssistant.info.time.completed - userCreated)
+
+          for (let j = i + 1; j < messages.length && messages[j].info.role !== 'user'; j++) {
+            const nextMessage = messages[j]
+            if (nextMessage.info.role !== 'assistant') continue
+
+            turn.assistantIds.add(nextMessage.info.id)
+            if (nextMessage.info.time.completed != null) {
+              turn.lastCompleted = nextMessage.info.time.completed
+            }
+          }
+
+          if (turn.lastCompleted != null) {
+            turns.push(turn)
           }
         }
+
+        for (const turn of turns) {
+          let targetId: string | undefined
+          for (const visibleMessage of visibleMessages) {
+            if (visibleMessage.info.role === 'assistant' && turn.assistantIds.has(visibleMessage.info.id)) {
+              targetId = visibleMessage.info.id
+            }
+          }
+
+          if (targetId && turn.lastCompleted != null) {
+            map.set(targetId, turn.lastCompleted - turn.userCreated)
+          }
+        }
+
         return map
-      }, [visibleMessages])
+      }, [messages, visibleMessages])
 
       const messageMaxWidthClass = isWideMode ? 'max-w-[95%] xl:max-w-6xl' : 'max-w-2xl'
+      const stickyRenderIds = useMemo(
+        () => new Set(visibleMessages.slice(-STICKY_RENDER_MESSAGE_COUNT).map(message => message.info.id)),
+        [visibleMessages],
+      )
+
+      const setScrollContainerRef = useCallback((node: HTMLDivElement | null) => {
+        scrollRef.current = node
+        setScrollRoot(prev => (prev === node ? prev : node))
+      }, [])
 
       // ============================================
       // Scroll: isAtBottom tracking
       // ============================================
+      // column-reverse: scrollTop=0 是底部，向上滚 scrollTop 为负。
+      // abs(scrollTop) 就是离底部的像素距离。
 
       useEffect(() => {
         const el = scrollRef.current
         if (!el) return
         const onScroll = () => {
-          // 内容没有溢出时（scrollHeight <= clientHeight），始终认为在底部
-          // 类似滚动条逻辑：没有溢出就没有滚动条，也不需要 scrollToBottom 按钮
           const hasOverflow = el.scrollHeight > el.clientHeight + 1
-          const atBottom = !hasOverflow || el.scrollHeight - el.scrollTop - el.clientHeight <= atBottomThreshold
+          const distFromBottom = Math.abs(el.scrollTop)
+          const atBottom = !hasOverflow || distFromBottom <= atBottomThreshold
           const prev = isAtBottomRef.current
           isAtBottomRef.current = atBottom
           if (prev !== atBottom) onAtBottomChange?.(atBottom)
+
+          // 用户滚离底部 → 解除 loadMore guard
+          if (!atBottom) loadMoreBlockedRef.current = false
         }
         el.addEventListener('scroll', onScroll, { passive: true })
         return () => el.removeEventListener('scroll', onScroll)
       }, [atBottomThreshold, onAtBottomChange])
 
-      // ============================================
-      // Scroll: auto-scroll during streaming
-      // ============================================
-
-      // User interaction tracking: pause auto-scroll while user is touching/scrolling
-      useEffect(() => {
-        const el = scrollRef.current
-        if (!el) return
-
-        const clearTimer = () => {
-          if (userInteractingTimerRef.current) {
-            clearTimeout(userInteractingTimerRef.current)
-            userInteractingTimerRef.current = null
-          }
-        }
-
-        const markInteracting = () => {
-          userInteractingRef.current = true
-          clearTimer()
-        }
-
-        const settleInteracting = (delay: number) => {
-          userInteractingRef.current = true
-          clearTimer()
-          userInteractingTimerRef.current = setTimeout(() => {
-            userInteractingRef.current = false
-          }, delay)
-        }
-
-        const handleWheel = () => settleInteracting(150)
-        const handleTouchStart = () => markInteracting()
-        const handleTouchMove = () => markInteracting()
-        const handleTouchEnd = () => settleInteracting(300)
-
-        el.addEventListener('wheel', handleWheel, { passive: true })
-        el.addEventListener('touchstart', handleTouchStart, { passive: true })
-        el.addEventListener('touchmove', handleTouchMove, { passive: true })
-        el.addEventListener('touchend', handleTouchEnd, { passive: true })
-        el.addEventListener('touchcancel', handleTouchEnd, { passive: true })
-
-        return () => {
-          el.removeEventListener('wheel', handleWheel)
-          el.removeEventListener('touchstart', handleTouchStart)
-          el.removeEventListener('touchmove', handleTouchMove)
-          el.removeEventListener('touchend', handleTouchEnd)
-          el.removeEventListener('touchcancel', handleTouchEnd)
-          clearTimer()
-          userInteractingRef.current = false
-        }
-      }, [])
-
-      // Streaming 时：RAF 循环高频 pin 底部
-      useEffect(() => {
-        if (!isStreaming) return
-        let rafId: number
-        const tick = () => {
-          if (suppressScrollRef.current || !isAtBottomRef.current || userInteractingRef.current) {
-            rafId = requestAnimationFrame(tick)
-            return
-          }
-          const el = scrollRef.current
-          if (el) el.scrollTop = el.scrollHeight
-          rafId = requestAnimationFrame(tick)
-        }
-        rafId = requestAnimationFrame(tick)
-        return () => cancelAnimationFrame(rafId)
-      }, [isStreaming])
-
-      // 非 streaming 时：ResizeObserver 监听内容高度变化，保持底部
-      // 覆盖所有场景：reasoning 折叠动画、CopyButton 出现、StepFinish 渲染、图片加载等
-      useEffect(() => {
-        if (isStreaming) return
-        const el = scrollRef.current
-        if (!el) return
-
-        const ro = new ResizeObserver(() => {
-          if (isAtBottomRef.current && !userInteractingRef.current && !suppressScrollRef.current) {
-            el.scrollTop = el.scrollHeight
-          }
-        })
-
-        // 监听滚动容器内所有直接子元素的尺寸变化
-        for (const child of el.children) {
-          ro.observe(child)
-        }
-
-        return () => ro.disconnect()
-      }, [isStreaming, visibleMessages])
+      // column-reverse 天然 stick-to-bottom，无需 auto-scroll 代码
 
       // ============================================
       // Session switch: snap to bottom
@@ -233,25 +203,16 @@ export const ChatArea = memo(
         if (sessionId === prevSessionIdRef.current) return
         prevSessionIdRef.current = sessionId
         isAtBottomRef.current = true
-        suppressScrollRef.current = false
+        loadMoreBlockedRef.current = true // 重置 guard
         onAtBottomChange?.(true)
 
-        // 延迟一帧确保 DOM 已更新
         requestAnimationFrame(() => {
           const el = scrollRef.current
-          if (el) el.scrollTop = el.scrollHeight
+          if (!el) return
+          el.scrollTop = 0 // column-reverse: 0 = 底部
 
           // 消息列表整体淡入 — 一次命令式 animate，零 React 开销
-          if (messagesRef.current) {
-            animate(
-              messagesRef.current,
-              { opacity: [0, 1] },
-              {
-                duration: 0.2,
-                ease: 'easeOut',
-              },
-            )
-          }
+          animate(el, { opacity: [0, 1] }, { duration: 0.2, ease: 'easeOut' })
         })
       }, [sessionId, onAtBottomChange])
 
@@ -260,13 +221,15 @@ export const ChatArea = memo(
         if (loadState !== 'loaded') return
         requestAnimationFrame(() => {
           const el = scrollRef.current
-          if (el && isAtBottomRef.current) el.scrollTop = el.scrollHeight
+          if (el && isAtBottomRef.current) el.scrollTop = 0 // column-reverse: 0 = 底部
         })
       }, [loadState])
 
       // ============================================
       // Load more: IntersectionObserver on top sentinel
       // ============================================
+      // prepend 时临时 .prepending 禁用 content-visibility，
+      // 确保 column-reverse 下新节点用真实高度，避免估算高度导致跳变。
 
       useEffect(() => {
         const sentinel = topSentinelRef.current
@@ -276,6 +239,8 @@ export const ChatArea = memo(
         const observer = new IntersectionObserver(
           ([entry]) => {
             if (!entry.isIntersecting || isLoadingRef.current) return
+            if (loadMoreBlockedRef.current) return
+
             const fn = loadMoreRef.current
             if (!fn) return
 
@@ -286,13 +251,20 @@ export const ChatArea = memo(
 
             isLoadingRef.current = true
             setIsLoadingMore(true)
-            // 快照 scrollHeight 用于补偿
-            prevScrollHeightRef.current = root.scrollHeight
-            prevFirstIdRef.current = visibleMessages[0]?.info.id ?? null
+
+            // 临时禁用 content-visibility，让所有消息用真实高度
+            root.classList.add('prepending')
 
             Promise.resolve(fn()).finally(() => {
               isLoadingRef.current = false
               setIsLoadingMore(false)
+
+              // double rAF: 等 React 渲染 + 浏览器 paint 后恢复 content-visibility
+              requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                  root.classList.remove('prepending')
+                })
+              })
             })
           },
           { root, rootMargin: '200px 0px 0px 0px' },
@@ -302,34 +274,17 @@ export const ChatArea = memo(
         return () => observer.disconnect()
       }, [sessionId, visibleMessages])
 
-      // ============================================
-      // Prepend compensation (useLayoutEffect)
-      // ============================================
-
-      useLayoutEffect(() => {
-        const el = scrollRef.current
-        if (!el) return
-        if (!prevFirstIdRef.current) return
-
-        const currentFirstId = visibleMessages[0]?.info.id ?? null
-        if (currentFirstId === prevFirstIdRef.current) return
-
-        // 首条 ID 变了 = 有 prepend 发生
-        const heightDiff = el.scrollHeight - prevScrollHeightRef.current
-        if (heightDiff > 0) {
-          el.scrollTop += heightDiff
-        }
-
-        prevFirstIdRef.current = currentFirstId
-        prevScrollHeightRef.current = el.scrollHeight
-      }, [visibleMessages])
+      // column-reverse 下 prepend 在负方向远端，scrollTop 不变，视口自然不跳。
+      // 不需要手动补偿。
 
       // ============================================
       // Visible message tracking (for outline)
       // ============================================
 
       const onVisibleIdsChangeRef = useRef(onVisibleMessageIdsChange)
-      onVisibleIdsChangeRef.current = onVisibleMessageIdsChange
+      useEffect(() => {
+        onVisibleIdsChangeRef.current = onVisibleMessageIdsChange
+      }, [onVisibleMessageIdsChange])
 
       useEffect(() => {
         const root = scrollRef.current
@@ -376,12 +331,14 @@ export const ChatArea = memo(
           scrollToBottom: (instant = false) => {
             const el = scrollRef.current
             if (!el) return
-            el.scrollTo({ top: el.scrollHeight, behavior: instant ? 'auto' : 'smooth' })
+            el.scrollTo({ top: 0, behavior: instant ? 'auto' : 'smooth' })
           },
           scrollToBottomIfAtBottom: () => {
-            if (suppressScrollRef.current || !isAtBottomRef.current) return
             const el = scrollRef.current
-            if (el) el.scrollTop = el.scrollHeight
+            if (!el) return
+            // 自动跟随使用严格贴底判定，避免用户刚开始向上滚时还在宽松阈值内被抢回去。
+            if (Math.abs(el.scrollTop) > 2) return
+            el.scrollTop = 0
           },
           scrollToLastMessage: () => {
             if (visibleMessages.length === 0) return
@@ -389,12 +346,6 @@ export const ChatArea = memo(
             scrollRef.current
               ?.querySelector(`[data-message-id="${lastId}"]`)
               ?.scrollIntoView({ block: 'start', behavior: 'auto' })
-          },
-          suppressAutoScroll: (duration = 500) => {
-            suppressScrollRef.current = true
-            setTimeout(() => {
-              suppressScrollRef.current = false
-            }, duration)
           },
           scrollToMessageIndex: (index: number) => {
             const msg = visibleMessages[index]
@@ -430,6 +381,9 @@ export const ChatArea = memo(
         return groups
       }, [visibleMessages])
 
+      // column-reverse 下 DOM 顺序反转：最新在前（视觉底部），最旧在后（视觉顶部）
+      const reversedGroups = useMemo(() => messageGroups.slice().reverse(), [messageGroups])
+
       const renderMessageGroup = useCallback(
         (messages: Message[]) => {
           const isUser = messages[0].info.role === 'user'
@@ -440,29 +394,44 @@ export const ChatArea = memo(
               <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
                 <div className={`min-w-0 group ${!isUser ? 'w-full' : ''} flex flex-col gap-2`}>
                   {messages.map(msg => (
-                    <div
+                    <ViewportMessageItem
                       key={msg.info.id}
-                      ref={(el: HTMLDivElement | null) => registerMessage?.(msg.info.id, el)}
-                      data-message-id={msg.info.id}
+                      messageId={msg.info.id}
+                      scrollRoot={scrollRoot}
+                      registerMessage={registerMessage}
+                      forceRender={msg.isStreaming || stickyRenderIds.has(msg.info.id)}
                     >
                       <MessageRenderer
                         message={msg}
+                        allowStreamingLayoutAnimation={allowStreamingLayoutAnimation}
                         turnDuration={turnDurationMap.get(msg.info.id)}
                         onUndo={onUndo}
+                        onFork={onFork}
                         canUndo={canUndo}
                         onEnsureParts={id => {
                           if (!sessionId) return
                           void messageStore.hydrateMessageParts(sessionId, id)
                         }}
                       />
-                    </div>
+                    </ViewportMessageItem>
                   ))}
                 </div>
               </div>
             </div>
           )
         },
-        [registerMessage, onUndo, canUndo, messageMaxWidthClass, sessionId, turnDurationMap],
+        [
+          scrollRoot,
+          stickyRenderIds,
+          registerMessage,
+          onUndo,
+          onFork,
+          canUndo,
+          messageMaxWidthClass,
+          sessionId,
+          turnDurationMap,
+          allowStreamingLayoutAnimation,
+        ],
       )
 
       return (
@@ -472,43 +441,34 @@ export const ChatArea = memo(
             <div className="absolute inset-0 z-10 flex items-center justify-center">
               <div className="flex flex-col items-center gap-3 text-text-400 session-loading-indicator">
                 <span className="w-5 h-5 border-2 border-text-400/30 border-t-text-400 rounded-full animate-spin" />
-                <span className="text-sm">Loading session...</span>
+                <span className="text-sm">{t('chatArea.loadingSession')}</span>
               </div>
             </div>
           )}
 
-          <div ref={scrollRef} className="h-full overflow-y-auto custom-scrollbar contain-content">
-            {/* Top sentinel for loadMore */}
-            <div ref={topSentinelRef} className="h-px" aria-hidden="true" />
+          <div
+            ref={setScrollContainerRef}
+            className="h-full overflow-y-auto overflow-x-hidden custom-scrollbar contain-content flex flex-col-reverse"
+          >
+            {/* column-reverse: DOM 第一个 = 视觉最底。所有子元素直接平铺，无 wrapper。
+                DOM 顺序（上→下）：shim, bottomSpacing, retryStatus, messages(新→旧), loadingIndicator, topSpacing, sentinel
+                视觉顺序（上→下）：sentinel, topSpacing, loadingIndicator, messages(旧→新), retryStatus, bottomSpacing, shim
+            */}
 
-            {/* Top spacing */}
-            <div className="h-20" />
+            {/* Shim: flex-1 占满剩余空间，消息不满一屏时推到视觉顶部 */}
+            <div className="flex-1" />
 
-            {/* Loading more indicator */}
-            {visibleMessages.length > 0 && isLoadingMore && (
-              <div className="flex justify-center py-3">
-                <div className="flex items-center gap-2 text-text-400 text-xs">
-                  <span className="w-3.5 h-3.5 border-2 border-text-400/30 border-t-text-400 rounded-full animate-spin" />
-                  Loading history...
-                </div>
-              </div>
-            )}
-
-            {/* Messages */}
-            <div ref={messagesRef}>
-              {messageGroups.map(group => {
-                const first = group[0]
-                return (
-                  <div key={first.info.id} className="chat-message-item">
-                    {renderMessageGroup(group)}
-                  </div>
-                )
-              })}
-            </div>
+            {/* Bottom spacing (视觉底部) */}
+            <div
+              className="shrink-0"
+              style={{
+                height: bottomPadding > 0 ? `${bottomPadding + 48}px` : '256px',
+              }}
+            />
 
             {/* Retry status */}
             {retryStatus && (
-              <div className={`w-full ${messageMaxWidthClass} mx-auto px-4`}>
+              <div className={`w-full ${messageMaxWidthClass} mx-auto px-4 shrink-0`}>
                 <div className="flex justify-start">
                   <div className="w-full min-w-0">
                     <RetryStatusInline status={retryStatus} />
@@ -517,15 +477,110 @@ export const ChatArea = memo(
               </div>
             )}
 
-            {/* Bottom spacing */}
-            <div
-              style={{
-                height: bottomPadding > 0 ? `${bottomPadding + 16}px` : '256px',
-              }}
-            />
+            {/* Messages: loadMore 的旧消息 append 到 DOM 末尾 = 视觉顶部，column-reverse 天然不跳 */}
+            {reversedGroups.map(group => {
+              const first = group[0]
+              return (
+                <div key={first.info.id} className="chat-message-item shrink-0">
+                  {renderMessageGroup(group)}
+                </div>
+              )
+            })}
+
+            {/* Loading more indicator (视觉顶部附近) */}
+            {visibleMessages.length > 0 && isLoadingMore && (
+              <div className="flex justify-center py-3 shrink-0">
+                <div className="flex items-center gap-2 text-text-400 text-xs">
+                  <span className="w-3.5 h-3.5 border-2 border-text-400/30 border-t-text-400 rounded-full animate-spin" />
+                  {t('chatArea.loadingHistory')}
+                </div>
+              </div>
+            )}
+
+            {/* Top spacing (视觉顶部) */}
+            <div className="h-20 shrink-0" />
+
+            {/* Top sentinel for loadMore (视觉最顶部) */}
+            <div ref={topSentinelRef} className="h-px shrink-0" aria-hidden="true" />
           </div>
         </div>
       )
     },
   ),
 )
+
+interface ViewportMessageItemProps {
+  messageId: string
+  scrollRoot: HTMLDivElement | null
+  forceRender?: boolean
+  registerMessage?: (id: string, element: HTMLElement | null) => void
+  children: ReactNode
+}
+
+const ViewportMessageItem = memo(function ViewportMessageItem({
+  messageId,
+  scrollRoot,
+  forceRender = false,
+  registerMessage,
+  children,
+}: ViewportMessageItemProps) {
+  const wrapperRef = useRef<HTMLDivElement | null>(null)
+  const contentRef = useRef<HTMLDivElement | null>(null)
+  const [isNearViewport, setIsNearViewport] = useState(true)
+  const [measuredHeight, setMeasuredHeight] = useState<number | null>(null)
+
+  const setWrapperElement = useCallback(
+    (node: HTMLDivElement | null) => {
+      wrapperRef.current = node
+      registerMessage?.(messageId, node)
+    },
+    [messageId, registerMessage],
+  )
+
+  useEffect(() => {
+    const wrapper = wrapperRef.current
+    if (!wrapper || !scrollRoot) return
+
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        setIsNearViewport(entry.isIntersecting)
+      },
+      {
+        root: scrollRoot,
+        rootMargin: MESSAGE_RENDER_ROOT_MARGIN,
+      },
+    )
+
+    observer.observe(wrapper)
+    return () => observer.disconnect()
+  }, [scrollRoot])
+
+  const shouldRender = forceRender || measuredHeight === null || isNearViewport
+
+  useEffect(() => {
+    const content = contentRef.current
+    if (!content || !shouldRender || typeof ResizeObserver === 'undefined') return
+
+    const updateHeight = () => {
+      const nextHeight = content.offsetHeight
+      if (nextHeight <= 0) return
+      setMeasuredHeight(prev => (prev !== null && Math.abs(prev - nextHeight) < 1 ? prev : nextHeight))
+    }
+
+    updateHeight()
+
+    const observer = new ResizeObserver(updateHeight)
+    observer.observe(content)
+    return () => observer.disconnect()
+  }, [shouldRender])
+
+  return (
+    <div ref={setWrapperElement} data-message-id={messageId}>
+      {shouldRender ? (
+        <div ref={contentRef}>{children}</div>
+      ) : (
+        <div aria-hidden="true" style={measuredHeight ? { height: `${measuredHeight}px` } : undefined} />
+      )}
+    </div>
+  )
+})

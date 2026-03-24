@@ -1,5 +1,137 @@
 # Changelog
 
+## [v0.3.1] - 2026-03-23
+
+- fix: unify chevron arrow direction - collapsed points right, expanded points down (3557e5a)
+- feat: compact inline permission - hide duplicate content when tool body already renders (63d571b)
+- refactor: redesign descriptive steps summary - merge categories, per-category errors, truncation (870f490)
+- fix: move diff stats next to title and remove exit code from descriptive steps (74e69c0)
+- fix: deferred permission unmount and multi-select question answer parsing (a8dc9bd)
+- fix: auto-expand readable tools that finish instantly in immersive mode (06dd4d4)
+
+## [v0.3.0] - 2026-03-22
+
+- fix: lint warnings, error tool diff stats, descriptive steps partial error coloring (ea53836)
+- feat: add diff stats summary to descriptive steps, fix write tool diff display (ce29807)
+- fix: immersive mode keeps non-readable tool groups collapsed even during execution (be61de2)
+- fix: resolve lint errors and remove unused eslint-disable directives (6037d19)
+- feat: add immersive mode with smart tool expand/collapse (0d4252d)
+- fix: skip QuestionRenderer when user dismissed or error (2029584)
+- feat: add QuestionRenderer with InlineQuestion-style read-only answered view (207f0c6)
+- fix: allow long bash commands to wrap in terminal view (8a7ddfd)
+- simplify: BashRenderer remove buttons, click command to copy, inline exit code (72186b5)
+- refactor: BashRenderer with fixed bottom bar, exit code, fullscreen, mobile-friendly buttons (cb7bb70)
+- fix: restore height limit and fullscreen button in compact mode (8f8689d)
+- feat: add BashRenderer with terminal style, Shiki highlighting, ANSI color support (856d74d)
+- feat: descriptive steps default collapsed, show output status on tool row (b25a0f2)
+- refactor: unify InlinePermission with tool output style, remove unused inline variant (ac510d7)
+- feat: add compact tool output mode (hide input, no collapse, no height limit) (1036133)
+- feat: add descriptive tool steps mode (d7e153f)
+- refactor: remove ambient tool mode and make inline requests opt-in (06034a2)
+
+## [v0.2.10] - 2026-03-21
+
+- feat: restore forked prompts in the composer (0792cf6)
+- fix: keep folder recents aligned with live updates (a0c8899)
+- fix: improve long duration formatting (62e6d94)
+
+## [v0.2.9] - 2026-03-19
+
+- fix: preserve custom audio when switching to builtin sounds (57119da)
+- fix: resolve all eslint warnings across codebase (4b31da3)
+- feat: add notification sound system with per-event configuration (b6019e2)
+- perf: defer offscreen chat message rendering (52d8ba8)
+- refactor: unify file and changes preview panels (9f315d8)
+
+## [v0.2.8] - 2026-03-18
+
+- fix: wrap panel tab label case blocks (d353b80)
+- feat: expand right panel resize range (3e67623)
+- feat: add tabbed session changes workspaces (ace0259)
+- feat: add tabbed file preview workspaces (ffad629)
+- fix: stabilize mobile terminal toolbar layout (1eb23b7)
+- feat: refine mobile terminal extra keys behavior (6e04254)
+- feat: add mobile extra keys toolbar for terminal (Termux-style) (2b185ac)
+- feat: show collapsed folder activity status (0bd1378)
+- feat: mark completed sessions as unread in recents (90cf8c3)
+
+## [v0.2.7] - 2026-03-18
+
+- feat: add markdown reasoning display mode (20fa476)
+- fix: avoid action overlap in folder recents on mobile (83b40b9)
+- feat: animate folder recents expansion (1b8ea13)
+- fix: preserve folder recents expansion across tab switches (058c289)
+- fix: limit streaming layout animation to bottom-follow mode (95c6aca)
+- fix: restore reasoning thinking shimmer transition (5c631c8)
+- feat: refine reasoning markdown presentation (71a012a)
+- fix(chat): extract formatDuration to shared formatUtils (c405092)
+- fix(chat): preserve aborted turn durations (13633fb)
+- feat: add diff gutter style setting (markers vs change bars) (4c5e7b8)
+- fix(i18n): improve permission dialog labels for request/rule clarity (e3730d5)
+- refactor: replace react-markdown with Streamdown for streaming-optimized markdown rendering (fcf3307)
+- refactor: extract useResponsiveMaxHeight hook for shared viewport-aware sizing (1993eb8)
+- fix: make ContentBlock maxHeight responsive to viewport size (b584071)
+- fix: resolve drag-to-reorder race condition causing stale closures (b08a763)
+
+## [v0.2.6] - 2026-03-17
+
+- refactor: redesign folder recents with drag-to-reorder and compact session items (88b4139)
+- fix: resolve bugs introduced by Python-to-Rust router migration (335b82e)
+- refactor: migrate gateway router from Python to Rust (290087f)
+- Feature: Add ability for router to read config from environment variables (bddc46b)
+- refactor: create new Rust project opencodeui-router (dd96377)
+- Update image previews in README.md (be84586)
+- fix: 服务器编辑/删除按钮始终可见 (0037a17)
+
+## [v0.2.5] - 2026-03-16
+
+- fix: 修复胶囊按钮和弹窗 header 图标与文字对齐 (a65e34e)
+- fix: 工具 icon 光晕不再被父容器裁切 (c946f19)
+- fix: 移动端设置 tab 选中态被 overflow 裁切 (027fcf9)
+- refactor: 设置界面优化 — 修复双滚动条、服务器编辑/删除确认 (ec75fad)
+- fix(i18n): 保留开发者工具常见英文术语不翻译 (f4a6022)
+- fix(i18n): 修正中文翻译质量 (f2bd269)
+- feat: add full i18n support with react-i18next (en + zh-CN) (bcd9850)
+
+## [v0.2.4] - 2026-03-16
+
+- fix: 会话级 Full Auto 恢复原有行为 — 只在当前所在页面的 session 生效，切走后不再自动放行 (e98bd4e)
+- fix: Full Auto 全局模式在 SSE 事件层拦截，确保非当前会话的权限请求也能自动放行 (1046837)
+- feat: Full Auto 三态模式 — 单击循环 off/会话级(黄)/全局(红)，会话级只放行当前会话，全局放行所有，纯内存刷新即清 (db95fc7)
+- fix: 去掉 steps header 入场动画，保持与其他元素一致不做特殊处理 (1e725a5)
+- fix: 虚拟滚动横向滚动条修复 — 去掉 probe 元素改用 scrollWidth 历史最大值追踪，SplitDiffView proxy scrollbar 加 gutter 占位对齐 (beee631)
+
+## [v0.2.3] - 2026-03-15
+
+- fix: probe 最长行选取改用 monoDisplayWidth 估算渲染宽度，CJK/全角字符按双倍计，修复含中文注释时横向滚动不到位 (d1fb35a)
+- Revert "fix: probe 元素去掉 overflow:hidden 修复横向滚动不到位 — hidden 在两个方向截断内容导致 scrollWidth 偏小" (0e5353f)
+- fix: probe 元素去掉 overflow:hidden 修复横向滚动不到位 — hidden 在两个方向截断内容导致 scrollWidth 偏小 (c9788fc)
+- fix: lint warnings — ref 写入移入 useEffect，CodePreview 提取 tokens 避免 render 期间读 ref，修复 CodePreview 测试，清理多余依赖和 eslint-disable (96955f7)
+- fix: 消除胶囊⇄输入框切换闪烁 — FloatingActions 改为同一 DOM 切换定位避免 remount，胶囊去掉入场动画和防抖回归纯 UI (bc3cc0c)
+- fix: 移动端胶囊⇄输入框过渡优化 — 胶囊退场不延迟避免与输入框重叠闪烁，收起方向加 120ms 防抖消除滚动边界抖动 (4060e83)
+- refactor: 统一动画体系 — UndoStatus 去自带动画改由 PresenceItem 控制，CollapsedCapsule 从 CSS animate-in 换成 usePresence，PresenceItem 加 shrink-0 防挤压，清理 CSS 死代码 (5106ac0)
+- fix: probe 元素精确撑开 scrollWidth 修复横向滚动不到位，去掉 backdrop-blur (0f3b764)
+- Revert "fix: 代码预览/diff 横向滚动重构 — CodePreview/UnifiedDiffView 改原生滚动+sticky gutter，SplitDiffView 用 probe 元素精确撑宽，去掉 backdrop-blur" (9d12d72)
+- fix: 代码预览/diff 横向滚动重构 — CodePreview/UnifiedDiffView 改原生滚动+sticky gutter，SplitDiffView 用 probe 元素精确撑宽，去掉 backdrop-blur (9e37646)
+- feat: usePresence hook + 浮动按钮/权限框/提问框入场退场动画 — 命令式 animate() 零额外 bundle (fb8c59f)
+- fix: 消息流底部间距增大，为浮动按钮预留空间 (7f32fa2)
+- fix: 删除 Output 的 Running... 文字，Input/Output spinner 统一无文字对齐 (e8c409e)
+- fix: 单工具调用始终 compact 布局，消除流结束时的缩进跳变 — SmoothHeight 平滑过渡 + steps header 入场动画 (031502f)
+- fix: 代码预览和 diff 行号背景色统一 — gutter 去掉硬编码背景，继承父容器颜色 (9ef8223)
+
+## [v0.2.2] - 2026-03-15
+
+- ci: 恢复 codegen-units=1 减小产物体积，Rust cache 按平台隔离，精简工作流 (5018e3b)
+- chore: 清理 suppressAutoScroll 死代码 (d47085e)
+- fix: loadMore 不跳变 — 去掉 inner wrapper，消息反序直接作为 flex 子元素，prepend 时临时禁用 content-visibility (657e7a4)
+- refactor: 用 column-reverse 替代 ResizeObserver 实现原生 stick-to-bottom (591a8eb)
+- refactor: DiffView 复用 DiffViewer 组件，删除 150 行重复 diff 渲染代码 (e78d987)
+
+## [v0.2.1] - 2026-03-14
+
+- refactor: 用 ResizeObserver 替代 RAF 轮询实现流式自动滚动 (10d9e6a)
+- fix: 空消息不参与可见列表，消除 abort 时的滚动跳变 (9dbaa4d)
+
 ## [v0.2.0] - 2026-03-14
 
 - feat: RECENTS 列表标记活跃 session 状态 (closes #25) (98ecce9)

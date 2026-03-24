@@ -28,7 +28,7 @@ describe('DiffView', () => {
     expect(screen.getByText('+1')).toBeInTheDocument()
     expect(screen.getByText('-1')).toBeInTheDocument()
 
-    fireEvent.click(screen.getByTitle('全屏查看'))
+    fireEvent.click(screen.getByTitle('Fullscreen'))
     expect(screen.getByTestId('fullscreen-viewer')).toBeInTheDocument()
   })
 })

@@ -1,8 +1,10 @@
 import type { ApiPermissionRequest, PermissionReply } from '../../api'
+import { useTranslation } from 'react-i18next'
 import { PermissionListIcon, UsersIcon, ReturnIcon, ChevronDownIcon } from '../../components/Icons'
 import { DiffView } from '../../components/DiffView'
 import { ContentBlock } from '../../components'
 import { childSessionStore, autoApproveStore } from '../../store'
+import { usePresence } from '../../hooks'
 
 interface PermissionDialogProps {
   request: ApiPermissionRequest
@@ -25,6 +27,7 @@ export function PermissionDialog({
   collapsed = false,
   onCollapsedChange,
 }: PermissionDialogProps) {
+  const { t } = useTranslation(['chat', 'common'])
   // 从 metadata 中提取 diff 信息
   const metadata = request.metadata
   const diff = metadata?.diff as string | undefined
@@ -47,13 +50,17 @@ export function PermissionDialog({
   const isFromChildSession = currentSessionId && request.sessionID !== currentSessionId
   const childSessionInfo = isFromChildSession ? childSessionStore.getSessionInfo(request.sessionID) : null
 
-  // 折叠态：由 InputBox 渲染胶囊，这里不渲染
-  if (collapsed) {
-    return null
-  }
+  // 弹出/收起动画
+  const { shouldRender, ref: animRef } = usePresence<HTMLDivElement>(!collapsed, {
+    from: { opacity: 0, transform: 'translateY(16px)' },
+    to: { opacity: 1, transform: 'translateY(0px)' },
+    duration: 0.2,
+  })
+
+  if (!shouldRender) return null
 
   return (
-    <div className="absolute bottom-0 left-0 right-0 z-[10]">
+    <div ref={animRef} className="absolute bottom-0 left-0 right-0 z-[10]">
       <div
         className="mx-auto max-w-3xl px-4 pb-2"
         style={{ paddingBottom: 'max(8px, var(--safe-area-inset-bottom, 8px))' }}
@@ -66,15 +73,19 @@ export function PermissionDialog({
                 <div className="flex items-center justify-center text-text-100 w-5 h-5">
                   <PermissionListIcon size={20} />
                 </div>
-                <h3 className="text-sm font-medium text-text-100">Permission: {request.permission}</h3>
+                <h3 className="text-sm leading-none font-medium text-text-100">
+                  {t('permissionDialog.permission', { permission: request.permission })}
+                </h3>
                 {queueLength > 1 && (
-                  <span className="text-xs text-text-400 bg-bg-200 px-1.5 py-0.5 rounded">+{queueLength - 1} more</span>
+                  <span className="text-xs text-text-400 bg-bg-200 px-1.5 py-0.5 rounded">
+                    {t('permissionDialog.moreCount', { count: queueLength - 1 })}
+                  </span>
                 )}
               </div>
               <button
                 onClick={() => onCollapsedChange?.(true)}
                 className="p-1 rounded-md text-text-400 hover:text-text-200 hover:bg-bg-200 transition-colors"
-                title="Minimize"
+                title={t('permissionDialog.minimize')}
               >
                 <ChevronDownIcon size={16} />
               </button>
@@ -84,7 +95,11 @@ export function PermissionDialog({
             {isFromChildSession && (
               <div className="px-4 pb-2 flex items-center gap-2">
                 <UsersIcon className="w-3.5 h-3.5 text-info-100" />
-                <span className="text-xs text-info-100">From subtask: {childSessionInfo?.title || 'Subtask'}</span>
+                <span className="text-xs text-info-100">
+                  {t('permissionDialog.fromSubtask', {
+                    title: childSessionInfo?.title || t('permissionDialog.subtaskFallback'),
+                  })}
+                </span>
               </div>
             )}
 
@@ -95,33 +110,33 @@ export function PermissionDialog({
               {/* Diff Preview for file edits */}
               {isFileEdit && diff && (
                 <div>
-                  <p className="text-xs text-text-400 mb-2">Changes preview</p>
+                  <p className="text-xs text-text-400 mb-2">{t('permissionDialog.changesPreview')}</p>
                   <DiffView
                     diff={diff}
                     before={before}
                     after={after}
                     filePath={filepath}
                     defaultCollapsed={false}
-                    maxHeight={200}
+                    maxHeight={150}
                   />
                 </div>
               )}
 
-              {/* Patterns */}
+              {/* Request */}
               {request.patterns && request.patterns.length > 0 && (
                 <ContentBlock
-                  label="Requesting"
+                  label={t('permissionDialog.request')}
                   content={request.patterns.map(p => p.replace(/\\n/g, '\n')).join('\n\n')}
                   language="bash"
-                  maxHeight={200}
+                  maxHeight={150}
                   collapsible={false}
                 />
               )}
 
-              {/* Already allowed */}
+              {/* Rule */}
               {request.always && request.always.length > 0 && (
                 <ContentBlock
-                  label="Allowed"
+                  label={t('permissionDialog.rule')}
                   content={request.always.join('\n')}
                   language="bash"
                   maxHeight={80}
@@ -138,7 +153,7 @@ export function PermissionDialog({
                 disabled={isReplying}
                 className="w-full flex items-center justify-between px-3.5 py-2 rounded-lg bg-text-100 text-bg-000 hover:bg-text-200 transition-colors font-medium text-sm disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <span>{isReplying ? 'Sending...' : 'Allow once'}</span>
+                <span>{isReplying ? t('common:sending') : t('permissionDialog.allowOnce')}</span>
                 {!isReplying && <ReturnIcon />}
               </button>
 
@@ -163,9 +178,9 @@ export function PermissionDialog({
                 disabled={isReplying}
                 className="w-full flex items-center justify-between px-3.5 py-2 rounded-lg border border-border-200/50 text-text-100 hover:bg-bg-200 transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <span>Always allow</span>
+                <span>{t('permissionDialog.alwaysAllow')}</span>
                 <span className="text-xs text-text-400">
-                  {autoApproveStore.enabled ? 'Browser session' : 'This session'}
+                  {autoApproveStore.enabled ? t('permissionDialog.browserSession') : t('permissionDialog.thisSession')}
                 </span>
               </button>
 
@@ -175,14 +190,14 @@ export function PermissionDialog({
                 disabled={isReplying}
                 className="w-full flex items-center justify-between px-3.5 py-2 rounded-lg text-text-300 hover:bg-bg-200 transition-colors text-sm disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <span>Reject</span>
+                <span>{t('common:reject')}</span>
                 <span className="text-xs text-text-500">Esc</span>
               </button>
 
               <p className="text-[11px] text-text-500 pt-1 px-1 leading-relaxed">
                 {autoApproveStore.enabled
-                  ? 'Auto-approve enabled. Refresh browser to reset permissions.'
-                  : 'You can change permission settings at any time.'}
+                  ? t('permissionDialog.autoApproveEnabled')
+                  : t('permissionDialog.changePermissionSettings')}
               </p>
             </div>
           </div>

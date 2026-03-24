@@ -1,9 +1,16 @@
-import { memo, useState, useRef, useEffect, useLayoutEffect, useMemo } from 'react'
+import { memo, useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback } from 'react'
+import { useTranslation } from 'react-i18next'
+import { diffLines } from 'diff'
 import { animate } from 'motion/mini'
-import { ChevronDownIcon, ChevronRightIcon, UndoIcon } from '../../components/Icons'
+import { ChevronDownIcon, ChevronRightIcon, SplitIcon, SpinnerIcon, UndoIcon } from '../../components/Icons'
 import { CopyButton, SmoothHeight } from '../../components/ui'
 import { useDelayedRender } from '../../hooks'
 import { useTheme } from '../../hooks/useTheme'
+import {
+  useInlineToolRequests,
+  findPermissionRequestForTool,
+  findQuestionRequestForTool,
+} from '../chat/InlineToolRequestContext'
 import {
   TextPartView,
   ReasoningPartView,
@@ -17,6 +24,7 @@ import {
   CompactionPartView,
   MessageErrorView,
 } from './parts'
+import { extractToolData } from './tools'
 import type {
   Message,
   Part,
@@ -31,20 +39,25 @@ import type {
   CompactionPart,
   AssistantMessageInfo,
 } from '../../types/message'
+import { formatDuration } from '../../utils/formatUtils'
 
 interface MessageRendererProps {
   message: Message
+  allowStreamingLayoutAnimation?: boolean
   /** 回合总时长（毫秒），仅在回合最后一条 assistant 消息上有值 */
   turnDuration?: number
   onUndo?: (userMessageId: string) => void
+  onFork?: (message: Message) => Promise<void> | void
   canUndo?: boolean
   onEnsureParts?: (messageId: string) => void
 }
 
 export const MessageRenderer = memo(function MessageRenderer({
   message,
+  allowStreamingLayoutAnimation = true,
   turnDuration,
   onUndo,
+  onFork,
   canUndo,
   onEnsureParts,
 }: MessageRendererProps) {
@@ -52,10 +65,17 @@ export const MessageRenderer = memo(function MessageRenderer({
   const isUser = info.role === 'user'
 
   if (isUser) {
-    return <UserMessageView message={message} onUndo={onUndo} canUndo={canUndo} />
+    return <UserMessageView message={message} onUndo={onUndo} onFork={onFork} canUndo={canUndo} />
   }
 
-  return <AssistantMessageView message={message} turnDuration={turnDuration} onEnsureParts={onEnsureParts} />
+  return (
+    <AssistantMessageView
+      message={message}
+      allowStreamingLayoutAnimation={allowStreamingLayoutAnimation}
+      turnDuration={turnDuration}
+      onEnsureParts={onEnsureParts}
+    />
+  )
 })
 
 // ============================================
@@ -69,10 +89,10 @@ function useEntryGrowAnimation(created: number) {
     if (!el || Date.now() - created > 3000) return
     const targetHeight = el.scrollHeight
     el.style.height = '0px'
-    el.style.overflow = 'hidden'
+    el.style.clipPath = 'inset(0 -100% 0 -100%)'
     animate(el, { height: `${targetHeight}px` }, { duration: 0.2, ease: 'easeOut' }).then(() => {
       el.style.height = ''
-      el.style.overflow = ''
+      el.style.clipPath = ''
     })
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
   return ref
@@ -98,6 +118,7 @@ const CollapsibleUserText = memo(function CollapsibleUserText({
   collapseEnabled: boolean
   messageId: string
 }) {
+  const { t } = useTranslation('message')
   const contentRef = useRef<HTMLParagraphElement>(null)
   const [expanded, setExpanded] = useState(() => expandedMessages.has(messageId))
   const [isOverflow, setIsOverflow] = useState(() => overflowStateCache.get(messageId) ?? false)
@@ -161,7 +182,7 @@ const CollapsibleUserText = memo(function CollapsibleUserText({
           className="mt-1 text-xs text-text-400 hover:text-text-200 transition-colors"
           aria-expanded={expanded}
         >
-          {expanded ? 'Show less' : 'Show more'}
+          {expanded ? t('showLess') : t('showMore')}
         </button>
       )}
     </div>
@@ -175,12 +196,15 @@ const CollapsibleUserText = memo(function CollapsibleUserText({
 interface UserMessageViewProps {
   message: Message
   onUndo?: (userMessageId: string) => void
+  onFork?: (message: Message) => Promise<void> | void
   canUndo?: boolean
 }
 
-const UserMessageView = memo(function UserMessageView({ message, onUndo, canUndo }: UserMessageViewProps) {
+const UserMessageView = memo(function UserMessageView({ message, onUndo, onFork, canUndo }: UserMessageViewProps) {
+  const { t } = useTranslation('message')
   const { parts, info } = message
   const [showSystemContext, setShowSystemContext] = useState(false)
+  const [isForking, setIsForking] = useState(false)
   const shouldRenderSystemContext = useDelayedRender(showSystemContext)
   const { collapseUserMessages } = useTheme()
 
@@ -194,6 +218,20 @@ const UserMessageView = memo(function UserMessageView({ message, onUndo, canUndo
 
   const hasSystemContext = syntheticParts.length > 0
   const messageText = textParts.map(p => p.text).join('')
+
+  const handleFork = useCallback(async () => {
+    if (!onFork || isForking) return
+
+    setIsForking(true)
+
+    try {
+      await onFork(message)
+    } catch {
+      // 业务错误由上层统一处理
+    } finally {
+      setIsForking(false)
+    }
+  }, [isForking, message, onFork])
 
   return (
     <div ref={wrapperRef} className="flex flex-col items-end group">
@@ -223,9 +261,9 @@ const UserMessageView = memo(function UserMessageView({ message, onUndo, canUndo
               className="flex items-center gap-1 text-xs text-text-400 hover:text-text-300 transition-colors py-1 px-2 rounded hover:bg-bg-200"
             >
               <span>
-                {showSystemContext ? 'Hide' : 'Show'} system context ({syntheticParts.length})
+                {showSystemContext ? t('hideSystemContext') : t('showSystemContext', { count: syntheticParts.length })}
               </span>
-              <span className={`transition-transform duration-300 ${showSystemContext ? 'rotate-180' : ''}`}>
+              <span className={`transition-transform duration-300 ${showSystemContext ? '' : '-rotate-90'}`}>
                 <ChevronDownIcon size={10} />
               </span>
             </button>
@@ -255,9 +293,20 @@ const UserMessageView = memo(function UserMessageView({ message, onUndo, canUndo
             <button
               onClick={() => onUndo(info.id)}
               className="p-1.5 rounded-md transition-colors duration-150 text-text-400 hover:text-text-200"
-              title="Undo from here"
+              title={t('undoFromHere')}
             >
               <UndoIcon />
+            </button>
+          )}
+          {onFork && (
+            <button
+              onClick={() => void handleFork()}
+              disabled={isForking}
+              className="p-1.5 rounded-md transition-colors duration-150 text-text-400 hover:text-text-200 disabled:cursor-default disabled:text-text-500"
+              title={isForking ? t('forkingFromHere') : t('forkFromHere')}
+              aria-label={isForking ? t('forkingFromHere') : t('forkFromHere')}
+            >
+              {isForking ? <SpinnerIcon className="animate-spin" /> : <SplitIcon />}
             </button>
           )}
           {/* Copy button */}
@@ -274,14 +323,17 @@ const UserMessageView = memo(function UserMessageView({ message, onUndo, canUndo
 
 const AssistantMessageView = memo(function AssistantMessageView({
   message,
+  allowStreamingLayoutAnimation = true,
   turnDuration,
   onEnsureParts,
 }: {
   message: Message
+  allowStreamingLayoutAnimation?: boolean
   turnDuration?: number
   onEnsureParts?: (messageId: string) => void
 }) {
   const { parts, isStreaming, info } = message
+  const { stepFinishDisplay } = useTheme()
 
   const wrapperRef = useEntryGrowAnimation(info.time.created)
 
@@ -324,7 +376,10 @@ const AssistantMessageView = memo(function AssistantMessageView({
 
   // 消息总耗时
   const { created, completed } = info.time
-  const duration = completed ? completed - created : undefined
+  const duration = completed != null ? completed - created : undefined
+  const hasStepFinishPart = parts.some(part => part.type === 'step-finish')
+  const showTurnDurationFooter =
+    !isStreaming && !hasStepFinishPart && stepFinishDisplay.turnDuration && turnDuration != null && turnDuration > 0
 
   if (!isStreaming && parts.length === 0) {
     // 有错误时直接显示错误信息
@@ -342,8 +397,8 @@ const AssistantMessageView = memo(function AssistantMessageView({
 
   return (
     <div ref={wrapperRef} className="flex flex-col gap-2 w-full group">
-      {/* 消息级 SmoothHeight：streaming 时所有高度变化统一平滑过渡 */}
-      <SmoothHeight isActive={!!isStreaming}>
+      {/* 只在贴底跟随时保留高度补间；用户看历史时关闭，避免消息生长把视口顶走 */}
+      <SmoothHeight isActive={!!isStreaming && allowStreamingLayoutAnimation}>
         <div className="flex flex-col gap-2">
           {renderItems.map((item: RenderItem, idx: number) => {
             // 耗时只在最后一个含 stepFinish 的 item 上显示
@@ -405,6 +460,12 @@ const AssistantMessageView = memo(function AssistantMessageView({
       {/* Message-level error */}
       {messageError && <MessageErrorView error={messageError} />}
 
+      {showTurnDurationFooter && (
+        <div className="flex items-center gap-3 text-[10px] text-text-500 pl-5 py-0.5">
+          <span>total {formatDuration(turnDuration!)}</span>
+        </div>
+      )}
+
       {/* Copy button */}
       {fullText.trim() && (
         <div className="md:opacity-0 md:group-hover:opacity-100 transition-opacity">
@@ -427,69 +488,182 @@ interface ToolGroupProps {
   isStreaming?: boolean
 }
 
+/** 用户需要阅读/交互的工具：沉浸模式下这些工具完成后保持展开 */
+const READABLE_TOOL_PATTERNS = /bash|sh|cmd|terminal|shell|write|save|edit|replace|patch|todo|question|ask/i
+
+function isReadableTool(toolName: string): boolean {
+  return READABLE_TOOL_PATTERNS.test(toolName.toLowerCase())
+}
+
 const ToolGroup = memo(function ToolGroup({ parts, stepFinish, duration, turnDuration, isStreaming }: ToolGroupProps) {
-  const [expanded, setExpanded] = useState(true)
-  const shouldRenderBody = useDelayedRender(expanded)
+  const { t } = useTranslation('message')
+  const { descriptiveToolSteps, inlineToolRequests, immersiveMode } = useTheme()
+  const { pendingPermissions, pendingQuestions } = useInlineToolRequests()
+  const hasPendingInteraction =
+    inlineToolRequests &&
+    parts.some(part => {
+      const childSessionId = getTaskChildSessionId(part)
+      return (
+        findPermissionRequestForTool(pendingPermissions, part.callID, childSessionId) ||
+        findQuestionRequestForTool(pendingQuestions, part.callID, childSessionId)
+      )
+    })
 
   const doneCount = parts.filter(p => p.state.status === 'completed').length
   const totalCount = parts.length
   const isAllDone = doneCount === totalCount
+  const hasActiveTools = parts.some(isToolPartActive)
+  const stepsSummary = descriptiveToolSteps ? buildDescriptiveToolStepsSummary(parts, t) : undefined
 
-  // compact: 单工具且非 streaming 时用紧凑布局（图标内联，无 timeline 连接线）
-  const isSingleCompact = totalCount === 1 && !isStreaming
-  // steps header: 仅多工具时显示
-  const showStepsHeader = totalCount > 1
+  // 汇总所有成功完成的工具的 diff stats（失败的不算）
+  const totalDiffStats = useMemo(() => {
+    if (!descriptiveToolSteps) return undefined
+    let additions = 0,
+      deletions = 0
+    for (const part of parts) {
+      if (part.state.status === 'error') continue
+      const data = extractToolData(part)
+      const stats = data.diffStats || computePartDiffStats(data)
+      if (stats) {
+        additions += stats.additions
+        deletions += stats.deletions
+      }
+    }
+    return additions || deletions ? { additions, deletions } : undefined
+  }, [descriptiveToolSteps, parts])
+
+  // 沉浸模式下：判断工具组是否包含需要用户阅读的工具
+  const hasReadableTools = immersiveMode && parts.some(p => isReadableTool(p.tool))
+
+  // descriptive 模式默认收起，运行时展开，完成后保持展开
+  // 沉浸模式下：没有可读工具则完成后自动收起
+  const [expanded, setExpanded] = useState(() => (descriptiveToolSteps ? false : true))
+  const hasAutoExpandedReadableRef = useRef(false)
+
+  useEffect(() => {
+    if (!descriptiveToolSteps) return
+    // 沉浸模式下没有可读工具：始终收起，不展开
+    if (immersiveMode && !hasReadableTools) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- 沉浸模式联动
+      setExpanded(false)
+      return
+    }
+    if (hasActiveTools || hasPendingInteraction) {
+      if (immersiveMode && hasReadableTools) {
+        hasAutoExpandedReadableRef.current = true
+      }
+      setExpanded(true)
+      return
+    }
+    // 某些可读工具（如 todo）可能首帧已完成，错过 running 态；流仍在继续时也自动展开一次
+    if (immersiveMode && isStreaming && hasReadableTools && !hasAutoExpandedReadableRef.current) {
+      hasAutoExpandedReadableRef.current = true
+      setExpanded(true)
+    }
+  }, [descriptiveToolSteps, hasActiveTools, hasPendingInteraction, immersiveMode, hasReadableTools, isStreaming])
+
+  const effectiveExpanded = expanded || hasPendingInteraction
+  const shouldRenderBody = useDelayedRender(effectiveExpanded)
+
+  // compact: 单工具时用紧凑布局（图标内联，无 timeline 连接线）
+  // 不区分 streaming 状态 — 单工具始终 compact，第二个工具到来时再自然过渡到 timeline
+  const isSingleCompact = totalCount === 1 && !descriptiveToolSteps
+  // steps header: 多工具始终显示；描述型 steps 模式下，单工具也显示
+  const showStepsHeader = totalCount > 1 || descriptiveToolSteps
 
   // 统一容器结构 — ToolPartView 始终在同一 React 树位置，
   // streaming→idle / 1→N 工具切换时不 remount，expanded 状态不丢失
   return (
-    <div className="flex flex-col">
-      {showStepsHeader && (
-        <button
-          onClick={() => setExpanded(!expanded)}
-          className="flex items-center gap-1.5 py-1.5 text-text-400 text-sm hover:text-text-200 hover:bg-bg-200/30 rounded-md transition-colors"
+    <SmoothHeight isActive={!!isStreaming}>
+      <div className="flex flex-col">
+        {showStepsHeader &&
+          (descriptiveToolSteps ? (
+            <button
+              type="button"
+              onClick={() => setExpanded(!expanded)}
+              className="flex w-full items-baseline rounded-md py-1 text-left hover:bg-bg-200/30 transition-colors"
+            >
+              <span className="text-[12px] leading-5">
+                {stepsSummary?.map((seg, i) => (
+                  <span
+                    key={i}
+                    className={
+                      seg.type === 'error'
+                        ? 'text-danger-100'
+                        : seg.type === 'active'
+                          ? 'reasoning-shimmer-text'
+                          : 'text-text-300'
+                    }
+                  >
+                    {seg.text}
+                  </span>
+                ))}
+              </span>
+              {totalDiffStats && !hasActiveTools && (
+                <span className="ml-1.5 inline-flex items-center gap-1 text-[10px] font-mono font-medium tabular-nums">
+                  {totalDiffStats.additions > 0 && (
+                    <span className="text-success-100">+{totalDiffStats.additions}</span>
+                  )}
+                  {totalDiffStats.deletions > 0 && <span className="text-danger-100">-{totalDiffStats.deletions}</span>}
+                </span>
+              )}
+            </button>
+          ) : (
+            <button
+              onClick={() => setExpanded(!expanded)}
+              className="flex items-center gap-1.5 py-1.5 text-text-400 text-sm hover:text-text-200 hover:bg-bg-200/30 rounded-md transition-colors"
+            >
+              <span className="inline-flex w-[14px] items-center justify-center shrink-0">
+                {effectiveExpanded ? <ChevronDownIcon size={14} /> : <ChevronRightIcon size={14} />}
+              </span>
+              <span className="inline-flex items-baseline gap-2 whitespace-nowrap">
+                <span className="text-[13px] font-medium leading-tight">
+                  {isAllDone
+                    ? t('stepsCount', { done: totalCount, total: totalCount })
+                    : t('stepsCount', { done: doneCount, total: totalCount })}
+                </span>
+                {!effectiveExpanded && stepFinish && (
+                  <span className="text-xs text-text-500 font-mono opacity-70">
+                    {formatTokens(stepFinish.tokens, t)}
+                  </span>
+                )}
+              </span>
+            </button>
+          ))}
+
+        <div
+          className={
+            showStepsHeader
+              ? `grid transition-[grid-template-rows] duration-300 ease-in-out ${effectiveExpanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`
+              : ''
+          }
         >
-          <span className="inline-flex w-[14px] items-center justify-center shrink-0">
-            {expanded ? <ChevronDownIcon size={14} /> : <ChevronRightIcon size={14} />}
-          </span>
-          <span className="inline-flex items-baseline gap-2 whitespace-nowrap">
-            <span className="text-[13px] font-medium leading-tight">
-              {isAllDone ? `${totalCount} steps` : `${doneCount}/${totalCount} steps`}
-            </span>
-            {!expanded && stepFinish && (
-              <span className="text-xs text-text-500 font-mono opacity-70">{formatTokens(stepFinish.tokens)}</span>
-            )}
-          </span>
-        </button>
-      )}
-
-      <div
-        className={
-          showStepsHeader
-            ? `grid transition-[grid-template-rows] duration-300 ease-in-out ${expanded ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'}`
-            : ''
-        }
-      >
-        <div className={showStepsHeader ? 'flex flex-col overflow-hidden' : 'flex flex-col'}>
-          {(!showStepsHeader || shouldRenderBody) &&
-            parts.map((part, idx) => (
-              <ToolPartView
-                key={part.id}
-                part={part}
-                isFirst={idx === 0}
-                isLast={idx === parts.length - 1}
-                compact={isSingleCompact}
-              />
-            ))}
+          <div
+            className={showStepsHeader ? 'flex flex-col min-h-0 min-w-0 overflow-hidden' : 'flex flex-col'}
+            style={showStepsHeader ? { clipPath: 'inset(0 -100% 0 -100%)' } : undefined}
+          >
+            {(!showStepsHeader || shouldRenderBody) &&
+              parts.map((part, idx) => (
+                <ToolPartView
+                  key={part.id}
+                  part={part}
+                  isFirst={idx === 0}
+                  isLast={idx === parts.length - 1}
+                  compact={isSingleCompact}
+                  descriptive={descriptiveToolSteps}
+                  isStreaming={isStreaming}
+                />
+              ))}
+          </div>
         </div>
+
+        {stepFinish && (
+          <div className="mt-2">
+            <StepFinishPartView part={stepFinish} duration={duration} turnDuration={turnDuration} />
+          </div>
+        )}
       </div>
-
-      {stepFinish && (
-        <div className="mt-2">
-          <StepFinishPartView part={stepFinish} duration={duration} turnDuration={turnDuration} />
-        </div>
-      )}
-    </div>
+    </SmoothHeight>
   )
 })
 
@@ -497,12 +671,205 @@ const ToolGroup = memo(function ToolGroup({ parts, stepFinish, duration, turnDur
 // Helpers
 // ============================================
 
-function formatTokens(tokens: StepFinishPart['tokens']): string {
+function formatTokens(
+  tokens: StepFinishPart['tokens'],
+  t: (key: string, opts?: Record<string, unknown>) => string,
+): string {
   const total = tokens.input + tokens.output + tokens.reasoning + tokens.cache.read + tokens.cache.write
   if (total >= 1000) {
-    return `${(total / 1000).toFixed(1)}k tokens`
+    return t('tokensK', { count: (total / 1000).toFixed(1) })
   }
-  return `${total} tokens`
+  return `${total} ${t('tokens')}`
+}
+
+type ToolSummaryCategory = 'execute' | 'edit' | 'explore' | 'network' | 'task' | 'todo' | 'question' | 'think' | 'other'
+
+type ToolSummaryPhase = 'done' | 'active' | 'failed'
+
+interface SummarySegment {
+  text: string
+  type: 'normal' | 'error' | 'active'
+}
+
+function buildDescriptiveToolStepsSummary(
+  parts: ToolPart[],
+  t: (key: string, opts?: Record<string, unknown>) => string,
+): SummarySegment[] {
+  const sep = t('toolSteps.separator')
+  const segments: SummarySegment[] = []
+  const MAX_CATEGORIES = 3
+
+  // ── 按类别汇总 done / failed / active ──
+  const categoryOrder: ToolSummaryCategory[] = []
+  const doneMap = new Map<ToolSummaryCategory, number>()
+  const failedMap = new Map<ToolSummaryCategory, number>()
+  const activeMap = new Map<ToolSummaryCategory, number>()
+
+  for (const part of parts) {
+    const cat = getToolSummaryCategory(part.tool)
+    if (!doneMap.has(cat)) {
+      categoryOrder.push(cat)
+      doneMap.set(cat, 0)
+      failedMap.set(cat, 0)
+      activeMap.set(cat, 0)
+    }
+    if (part.state.status === 'completed') doneMap.set(cat, (doneMap.get(cat) || 0) + 1)
+    else if (part.state.status === 'error') failedMap.set(cat, (failedMap.get(cat) || 0) + 1)
+    else if (isToolPartActive(part)) activeMap.set(cat, (activeMap.get(cat) || 0) + 1)
+  }
+
+  // ── 已完成 + 失败（合并同类别）──
+  // 先收集所有完成态类别（含纯失败的类别）
+  const finishedCategories = categoryOrder.filter(cat => (doneMap.get(cat) || 0) > 0 || (failedMap.get(cat) || 0) > 0)
+
+  const pushFinishedSegments = (cats: ToolSummaryCategory[]) => {
+    for (const cat of cats) {
+      const done = doneMap.get(cat) || 0
+      const failed = failedMap.get(cat) || 0
+      if (segments.length > 0) segments.push({ text: sep, type: 'normal' })
+
+      if (done > 0 && failed > 0) {
+        // 同类别既有成功又有失败：合并成一句
+        const total = done + failed
+        segments.push({ text: formatToolSummarySegment(cat, total, 'done', t), type: 'normal' })
+        segments.push({ text: t('toolSteps.failedSuffix', { count: failed }), type: 'error' })
+      } else if (done > 0) {
+        segments.push({ text: formatToolSummarySegment(cat, done, 'done', t), type: 'normal' })
+      } else {
+        // 纯失败
+        segments.push({ text: formatToolSummarySegment(cat, failed, 'failed', t), type: 'error' })
+      }
+    }
+  }
+
+  if (finishedCategories.length <= MAX_CATEGORIES) {
+    pushFinishedSegments(finishedCategories)
+  } else {
+    pushFinishedSegments(finishedCategories.slice(0, MAX_CATEGORIES))
+    const restCount = finishedCategories
+      .slice(MAX_CATEGORIES)
+      .reduce((sum, cat) => sum + (doneMap.get(cat) || 0) + (failedMap.get(cat) || 0), 0)
+    segments.push({ text: sep, type: 'normal' })
+    segments.push({ text: t('toolSteps.moreActions', { count: restCount }), type: 'normal' })
+  }
+
+  // ── 运行中 ──
+  const activeCategories = categoryOrder.filter(cat => (activeMap.get(cat) || 0) > 0)
+  for (const cat of activeCategories) {
+    if (segments.length > 0) segments.push({ text: sep, type: 'normal' })
+    segments.push({ text: formatToolSummarySegment(cat, activeMap.get(cat) || 0, 'active', t), type: 'active' })
+  }
+
+  if (segments.length === 0) {
+    return [{ text: t('stepsCount', { done: 0, total: parts.length }), type: 'normal' }]
+  }
+
+  return segments
+}
+
+function formatToolSummarySegment(
+  category: ToolSummaryCategory,
+  count: number,
+  phase: ToolSummaryPhase,
+  t: (key: string, opts?: Record<string, unknown>) => string,
+): string {
+  const key = `toolSteps.${category}${phase.charAt(0).toUpperCase()}${phase.slice(1)}`
+  return t(key, { count })
+}
+
+function getToolSummaryCategory(toolName: string): ToolSummaryCategory {
+  const lower = toolName.toLowerCase()
+
+  if (lower.includes('todo')) return 'todo'
+  if (lower === 'task') return 'task'
+  if (lower.includes('question') || lower.includes('ask')) return 'question'
+  if (
+    lower.includes('bash') ||
+    lower.includes('sh') ||
+    lower.includes('cmd') ||
+    lower.includes('terminal') ||
+    lower.includes('shell')
+  ) {
+    return 'execute'
+  }
+  if (
+    lower.includes('write') ||
+    lower.includes('save') ||
+    lower.includes('edit') ||
+    lower.includes('replace') ||
+    lower.includes('patch')
+  ) {
+    return 'edit'
+  }
+  if (
+    lower.includes('read') ||
+    lower.includes('cat') ||
+    lower.includes('search') ||
+    lower.includes('find') ||
+    lower.includes('grep') ||
+    lower.includes('glob')
+  ) {
+    return 'explore'
+  }
+  if (
+    lower.includes('web') ||
+    lower.includes('fetch') ||
+    lower.includes('http') ||
+    lower.includes('browse') ||
+    lower.includes('network') ||
+    lower.includes('exa')
+  ) {
+    return 'network'
+  }
+  if (lower.includes('think') || lower.includes('reason') || lower.includes('plan')) return 'think'
+  return 'other'
+}
+
+function isToolPartActive(part: ToolPart): boolean {
+  return part.state.status === 'running' || part.state.status === 'pending'
+}
+
+function getTaskChildSessionId(part: ToolPart): string | undefined {
+  if (part.tool.toLowerCase() !== 'task') return undefined
+  const metadata = part.state.metadata as Record<string, unknown> | undefined
+  return metadata?.sessionId as string | undefined
+}
+
+/** 从 extractToolData 的结果计算 diff stats（当 metadata 没给 diffStats 时） */
+function computePartDiffStats(data: {
+  diff?: { before: string; after: string } | string
+  files?: Array<{ before?: string; after?: string; additions?: number; deletions?: number }>
+}): { additions: number; deletions: number } | undefined {
+  if (data.files?.length) {
+    let a = 0,
+      d = 0
+    for (const f of data.files) {
+      if (f.additions !== undefined) a += f.additions
+      if (f.deletions !== undefined) d += f.deletions
+      if (f.additions === undefined && f.before !== undefined && f.after !== undefined) {
+        const s = diffPairStats(f.before, f.after)
+        a += s.additions
+        d += s.deletions
+      }
+    }
+    return a || d ? { additions: a, deletions: d } : undefined
+  }
+  if (data.diff && typeof data.diff === 'object') {
+    const s = diffPairStats(data.diff.before, data.diff.after)
+    return s.additions || s.deletions ? s : undefined
+  }
+  return undefined
+}
+
+function diffPairStats(before: string, after: string): { additions: number; deletions: number } {
+  const changes = diffLines(before, after)
+  let additions = 0,
+    deletions = 0
+  for (const c of changes) {
+    if (c.added) additions += c.count || 0
+    if (c.removed) deletions += c.count || 0
+  }
+  return { additions, deletions }
 }
 
 // ============================================

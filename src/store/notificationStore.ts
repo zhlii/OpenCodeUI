@@ -16,6 +16,9 @@ import { useSyncExternalStore } from 'react'
 
 export type NotificationType = 'permission' | 'question' | 'completed' | 'error'
 
+/** push 后的回调，用于声音播放等扩展 */
+export type NotificationPushListener = (type: NotificationType) => void
+
 export interface NotificationEntry {
   id: string
   type: NotificationType
@@ -83,6 +86,7 @@ class NotificationStore {
   }
   private subscribers = new Set<Subscriber>()
   private toastTimers = new Map<string, ReturnType<typeof setTimeout>>()
+  private pushListeners = new Set<NotificationPushListener>()
 
   /** toast 弹窗总开关 */
   toastEnabled: boolean = (() => {
@@ -117,6 +121,12 @@ class NotificationStore {
     }
     // 关闭时清掉当前所有 toast
     if (!enabled) this.dismissAllToasts()
+  }
+
+  /** 注册 push 后回调（声音播放等） */
+  onPush(listener: NotificationPushListener): () => void {
+    this.pushListeners.add(listener)
+    return () => this.pushListeners.delete(listener)
   }
 
   // ============================================
@@ -155,6 +165,15 @@ class NotificationStore {
       this.persist()
       this.notify()
     }
+
+    // 触发 push 后回调（声音播放等）
+    this.pushListeners.forEach(fn => {
+      try {
+        fn(type)
+      } catch {
+        // 回调异常不影响通知流程
+      }
+    })
   }
 
   // ============================================
@@ -170,6 +189,21 @@ class NotificationStore {
 
   markAllRead() {
     const notifications = this.state.notifications.map(n => (n.read ? n : { ...n, read: true }))
+    this.state = { ...this.state, notifications }
+    this.persist()
+    this.notify()
+  }
+
+  markSessionNotificationsRead(sessionId: string, type?: NotificationType) {
+    let changed = false
+    const notifications = this.state.notifications.map(n => {
+      if (n.sessionId !== sessionId) return n
+      if (type && n.type !== type) return n
+      if (n.read) return n
+      changed = true
+      return { ...n, read: true }
+    })
+    if (!changed) return
     this.state = { ...this.state, notifications }
     this.persist()
     this.notify()
@@ -260,4 +294,16 @@ export function useNotifications(): NotificationEntry[] {
 export function useUnreadNotificationCount(): number {
   const state = useNotificationStore()
   return state.notifications.filter(n => !n.read).length
+}
+
+/** 未读 completed 通知对应的 sessionId 集合 */
+export function useUnreadCompletedSessionIds(): Set<string> {
+  const state = useNotificationStore()
+  return new Set(state.notifications.filter(n => n.type === 'completed' && !n.read).map(n => n.sessionId))
+}
+
+/** 某个 session 是否有未读 completed 通知 */
+export function useHasUnreadCompletedNotification(sessionId: string): boolean {
+  const unreadCompletedSessionIds = useUnreadCompletedSessionIds()
+  return unreadCompletedSessionIds.has(sessionId)
 }

@@ -1,6 +1,9 @@
+import { useSyncExternalStore } from 'react'
+import { useTranslation } from 'react-i18next'
 import { ContentBlock } from '../../../../components'
 import { AlertCircleIcon } from '../../../../components/Icons'
 import { detectLanguage } from '../../../../utils/languageUtils'
+import { themeStore } from '../../../../store/themeStore'
 import type { ToolRendererProps, ExtractedToolData } from '../types'
 
 // ============================================
@@ -9,7 +12,10 @@ import type { ToolRendererProps, ExtractedToolData } from '../types'
 // ============================================
 
 export function DefaultRenderer({ part, data }: ToolRendererProps) {
+  const { t } = useTranslation('message')
   const { state, tool } = part
+  const { toolCardStyle } = useSyncExternalStore(themeStore.subscribe, themeStore.getSnapshot)
+  const isCompact = toolCardStyle === 'compact'
   const isActive = state.status === 'running' || state.status === 'pending'
 
   const hasInput = !!data.input?.trim()
@@ -17,15 +23,19 @@ export function DefaultRenderer({ part, data }: ToolRendererProps) {
   const hasOutput = !!(data.files || data.diff || data.output?.trim() || data.exitCode !== undefined)
   const hasDiagnostics = !!data.diagnostics?.length
 
-  // Output 不再依赖 hasInput
   const showOutput = hasOutput || hasError || (isActive && !hasOutput)
+
+  // compact 模式下，工具还在运行且没有任何输出时，不渲染任何东西
+  if (isCompact && isActive && !hasOutput && !hasError) {
+    return null
+  }
 
   return (
     <div className="flex flex-col gap-2">
-      {/* Input - 默认折叠 */}
-      {(hasInput || (isActive && !hasInput)) && (
+      {/* Input — compact 模式下不渲染 */}
+      {!isCompact && (hasInput || (isActive && !hasInput)) && (
         <ContentBlock
-          label="Input"
+          label={t('defaultRenderer.input')}
           content={data.input || ''}
           language={data.inputLang}
           isLoading={isActive && !hasInput}
@@ -36,7 +46,14 @@ export function DefaultRenderer({ part, data }: ToolRendererProps) {
 
       {/* Output */}
       {showOutput && (
-        <OutputBlock tool={tool} data={data} isActive={isActive} hasError={hasError} hasOutput={hasOutput} />
+        <OutputBlock
+          tool={tool}
+          data={data}
+          isActive={isActive}
+          hasError={hasError}
+          hasOutput={hasOutput}
+          compact={isCompact}
+        />
       )}
 
       {/* Diagnostics */}
@@ -55,18 +72,23 @@ interface OutputBlockProps {
   isActive: boolean
   hasError: boolean
   hasOutput: boolean
+  compact?: boolean
 }
 
-function OutputBlock({ tool, data, isActive, hasError, hasOutput }: OutputBlockProps) {
+function OutputBlock({ tool, data, isActive, hasError, hasOutput, compact }: OutputBlockProps) {
+  const { t } = useTranslation('message')
+
   // 1. Error 优先
   if (hasError) {
-    return <ContentBlock label="Error" content={data.error || ''} variant="error" />
+    return (
+      <ContentBlock label={t('defaultRenderer.error')} content={data.error || ''} variant="error" compact={compact} />
+    )
   }
 
-  // 2. 工具活跃时（running/pending）统一显示 loading
-  //    所有工具行为一致，权限弹窗已有预览，这里不重复展示
+  // 2. 工具活跃时（running/pending）统一显示 loading — compact 模式下不显示
   if (isActive) {
-    return <ContentBlock label="Output" isLoading={true} loadingText="Running..." />
+    if (compact) return null
+    return <ContentBlock label={t('defaultRenderer.output')} isLoading={true} loadingText="" compact={compact} />
   }
 
   // 3. 完成后显示结果
@@ -78,7 +100,7 @@ function OutputBlock({ tool, data, isActive, hasError, hasOutput }: OutputBlockP
           {data.files.map((file, idx) => (
             <ContentBlock
               key={idx}
-              label={formatLabel(tool)}
+              label={formatLabel(tool, t)}
               filePath={file.filePath}
               diff={
                 file.diff ||
@@ -87,6 +109,7 @@ function OutputBlock({ tool, data, isActive, hasError, hasOutput }: OutputBlockP
                   : undefined)
               }
               language={detectLanguage(file.filePath)}
+              compact={compact}
             />
           ))}
         </div>
@@ -97,11 +120,12 @@ function OutputBlock({ tool, data, isActive, hasError, hasOutput }: OutputBlockP
     if (data.diff) {
       return (
         <ContentBlock
-          label="Output"
+          label={t('defaultRenderer.output')}
           filePath={data.filePath}
           diff={data.diff}
           diffStats={data.diffStats}
           language={data.outputLang}
+          compact={compact}
         />
       )
     }
@@ -109,17 +133,18 @@ function OutputBlock({ tool, data, isActive, hasError, hasOutput }: OutputBlockP
     // Regular output
     return (
       <ContentBlock
-        label="Output"
+        label={t('defaultRenderer.output')}
         content={data.output}
         language={data.outputLang}
         filePath={data.filePath}
         stats={data.exitCode !== undefined ? { exit: data.exitCode } : undefined}
+        compact={compact}
       />
     )
   }
 
   // 4. 无输出
-  return <ContentBlock label="Output" />
+  return <ContentBlock label={t('defaultRenderer.output')} compact={compact} />
 }
 
 // ============================================
@@ -131,6 +156,7 @@ interface DiagnosticsBlockProps {
 }
 
 function DiagnosticsBlock({ diagnostics }: DiagnosticsBlockProps) {
+  const { t } = useTranslation('message')
   const errors = diagnostics.filter(d => d.severity === 'error')
   const warnings = diagnostics.filter(d => d.severity === 'warning')
 
@@ -140,17 +166,13 @@ function DiagnosticsBlock({ diagnostics }: DiagnosticsBlockProps) {
     <div className="rounded-lg border border-border-200/40 bg-bg-100/80 overflow-hidden text-xs">
       <div className="px-3 h-8 bg-bg-200/40 flex items-center gap-2">
         <AlertCircleIcon className="w-3.5 h-3.5 text-text-400" />
-        <span className="font-medium text-text-300">Diagnostics</span>
+        <span className="font-medium text-text-300">{t('defaultRenderer.diagnostics')}</span>
         <div className="flex items-center gap-2 ml-auto font-mono text-[10px]">
           {errors.length > 0 && (
-            <span className="text-danger-100">
-              {errors.length} error{errors.length > 1 ? 's' : ''}
-            </span>
+            <span className="text-danger-100">{t('defaultRenderer.errorsCount', { count: errors.length })}</span>
           )}
           {warnings.length > 0 && (
-            <span className="text-warning-100">
-              {warnings.length} warning{warnings.length > 1 ? 's' : ''}
-            </span>
+            <span className="text-warning-100">{t('defaultRenderer.warningsCount', { count: warnings.length })}</span>
           )}
         </div>
       </div>
@@ -177,12 +199,11 @@ function DiagnosticsBlock({ diagnostics }: DiagnosticsBlockProps) {
 // Helpers
 // ============================================
 
-function formatLabel(name: string): string {
-  if (!name) return 'Result'
-  return (
-    name
-      .split(/[_-]/)
-      .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
-      .join(' ') + ' Result'
-  )
+function formatLabel(name: string, t: (key: string, opts?: Record<string, unknown>) => string): string {
+  if (!name) return t('defaultRenderer.result')
+  const formatted = name
+    .split(/[_-]/)
+    .map(word => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+    .join(' ')
+  return t('defaultRenderer.nameResult', { name: formatted })
 }

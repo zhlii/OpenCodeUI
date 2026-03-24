@@ -20,7 +20,7 @@ export default defineConfig({
 
           if (id.includes('@xterm/')) return 'vendor-terminal'
           if (id.includes('shiki')) return 'vendor-shiki'
-          if (id.includes('react-markdown') || id.includes('remark-gfm')) return 'vendor-markdown'
+          if (id.includes('streamdown') || id.includes('remend')) return 'vendor-markdown'
 
           if (id.includes('@tauri-apps/')) return 'vendor-tauri'
         },
@@ -43,6 +43,7 @@ export default defineConfig({
       '/api': {
         target: 'http://127.0.0.1:4096',
         changeOrigin: true,
+        ws: true,
         rewrite: path => path.replace(/^\/api/, ''),
       },
     },

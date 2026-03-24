@@ -4,10 +4,32 @@
  */
 
 import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { useKeybindingStore } from '../../hooks/useKeybindings'
 import { keyEventToString, formatKeybinding, parseKeybinding } from '../../store/keybindingStore'
 import { UndoIcon, SearchIcon } from '../../components/Icons'
 import type { KeybindingConfig, KeybindingAction } from '../../store/keybindingStore'
+
+const ACTION_TRANSLATION_KEYS: Record<KeybindingAction, { label: string; description: string }> = {
+  openSettings: { label: 'openSettings', description: 'openSettingsDesc' },
+  openProject: { label: 'openProject', description: 'openProjectDesc' },
+  commandPalette: { label: 'commandPalette', description: 'commandPaletteDesc' },
+  toggleSidebar: { label: 'toggleSidebar', description: 'toggleSidebarDesc' },
+  toggleRightPanel: { label: 'toggleRightPanel', description: 'toggleRightPanelDesc' },
+  focusInput: { label: 'focusInput', description: 'focusInputDesc' },
+  newSession: { label: 'newSession', description: 'newSessionDesc' },
+  archiveSession: { label: 'archiveSession', description: 'archiveSessionDesc' },
+  previousSession: { label: 'previousSession', description: 'previousSessionDesc' },
+  nextSession: { label: 'nextSession', description: 'nextSessionDesc' },
+  toggleTerminal: { label: 'toggleTerminal', description: 'toggleTerminalDesc' },
+  newTerminal: { label: 'newTerminal', description: 'newTerminalDesc' },
+  selectModel: { label: 'selectModel', description: 'selectModelDesc' },
+  toggleAgent: { label: 'toggleAgent', description: 'toggleAgentDesc' },
+  sendMessage: { label: 'sendMessage', description: 'sendMessageDesc' },
+  cancelMessage: { label: 'cancelMessage', description: 'cancelMessageDesc' },
+  copyLastResponse: { label: 'copyLastResponse', description: 'copyLastResponseDesc' },
+  toggleFullAuto: { label: 'toggleFullAuto', description: 'toggleFullAutoDesc' },
+}
 
 // ============================================
 // Kbd - 按键胶囊
@@ -48,9 +70,10 @@ interface KeybindingRowProps {
   onEdit: (action: KeybindingAction, newKey: string) => void
   onReset: (action: KeybindingAction) => void
   isKeyUsed: (key: string, exclude?: KeybindingAction) => boolean
+  t: (key: string) => string
 }
 
-function KeybindingRow({ config, onEdit, onReset, isKeyUsed }: KeybindingRowProps) {
+function KeybindingRow({ config, onEdit, onReset, isKeyUsed, t }: KeybindingRowProps) {
   const [isEditing, setIsEditing] = useState(false)
   const [tempKey, setTempKey] = useState('')
   const [error, setError] = useState('')
@@ -69,9 +92,9 @@ function KeybindingRow({ config, onEdit, onReset, isKeyUsed }: KeybindingRowProp
 
       const newKey = keyEventToString(e)
       setTempKey(newKey)
-      setError(isKeyUsed(newKey, config.action) ? 'Already in use' : '')
+      setError(isKeyUsed(newKey, config.action) ? t('keybindings.alreadyInUse') : '')
     },
-    [isKeyUsed, config.action],
+    [isKeyUsed, config.action, t],
   )
 
   const confirm = useCallback(() => {
@@ -122,7 +145,7 @@ function KeybindingRow({ config, onEdit, onReset, isKeyUsed }: KeybindingRowProp
           onClick={() => onReset(config.action)}
           className="p-1 mr-1 rounded text-text-400 hover:text-text-100 hover:bg-bg-200 
                      opacity-0 group-hover:opacity-100 transition-opacity"
-          title="Reset to default"
+          title={t('keybindings.resetToDefault')}
         >
           <UndoIcon size={12} />
         </button>
@@ -184,30 +207,41 @@ const CATEGORY_ORDER: KeybindingConfig['category'][] = [
 ]
 
 const CATEGORY_LABELS: Record<KeybindingConfig['category'], string> = {
-  general: 'General',
-  session: 'Session',
-  terminal: 'Terminal',
-  model: 'Model',
-  message: 'Message',
-  permission: 'Permission',
+  general: 'keybindings.categories.general',
+  session: 'keybindings.categories.session',
+  terminal: 'keybindings.categories.terminal',
+  model: 'keybindings.categories.model',
+  message: 'keybindings.categories.message',
+  permission: 'keybindings.categories.permission',
 }
 
 export function KeybindingsSection() {
+  const { t } = useTranslation(['settings', 'common', 'commands'])
   const { keybindings, setKeybinding, resetKeybinding, resetAll, isKeyUsed } = useKeybindingStore()
   const [search, setSearch] = useState('')
   const searchRef = useRef<HTMLInputElement>(null)
 
+  const localizedKeybindings = useMemo(
+    () =>
+      keybindings.map(kb => ({
+        ...kb,
+        label: t(`commands:${ACTION_TRANSLATION_KEYS[kb.action].label}`),
+        description: t(`commands:${ACTION_TRANSLATION_KEYS[kb.action].description}`),
+      })),
+    [keybindings, t],
+  )
+
   // 搜索直接过滤，不需要 toggle
   const filtered = useMemo(() => {
-    if (!search.trim()) return keybindings
+    if (!search.trim()) return localizedKeybindings
     const q = search.toLowerCase()
-    return keybindings.filter(
+    return localizedKeybindings.filter(
       kb =>
         kb.label.toLowerCase().includes(q) ||
         kb.description.toLowerCase().includes(q) ||
         kb.currentKey.toLowerCase().includes(q),
     )
-  }, [keybindings, search])
+  }, [localizedKeybindings, search])
 
   const grouped = useMemo(
     () =>
@@ -217,7 +251,7 @@ export function KeybindingsSection() {
     [filtered],
   )
 
-  const hasModifications = keybindings.some(kb => kb.currentKey !== kb.defaultKey)
+  const hasModifications = localizedKeybindings.some(kb => kb.currentKey !== kb.defaultKey)
 
   // 自动聚焦搜索
   useEffect(() => {
@@ -225,16 +259,16 @@ export function KeybindingsSection() {
   }, [])
 
   return (
-    <div className="flex flex-col h-full">
+    <div className="flex flex-col">
       {/* Header */}
       <div className="flex items-center justify-between mb-3">
-        <span className="text-xs font-medium text-text-400 uppercase tracking-wider">Keyboard Shortcuts</span>
+        <span className="text-xs font-medium text-text-400 uppercase tracking-wider">{t('keybindings.title')}</span>
         {hasModifications && (
           <button
             onClick={resetAll}
             className="text-[11px] text-text-400 hover:text-danger-100 px-2 py-0.5 rounded hover:bg-danger-100/10 transition-colors"
           >
-            Reset all
+            {t('keybindings.resetAll')}
           </button>
         )}
       </div>
@@ -247,22 +281,22 @@ export function KeybindingsSection() {
           type="text"
           value={search}
           onChange={e => setSearch(e.target.value)}
-          placeholder="Filter..."
+          placeholder={t('keybindings.filterPlaceholder')}
           className="w-full h-8 pl-8 pr-3 text-[13px] bg-bg-050 border border-border-200 rounded-lg
                      text-text-100 placeholder:text-text-400 
                      focus:outline-none focus:border-accent-main-100/50 transition-colors"
         />
       </div>
 
-      {/* List */}
-      <div className="flex-1 overflow-y-auto -mx-1 custom-scrollbar">
+      {/* List - no inner scroll, parent handles scrolling */}
+      <div className="-mx-1">
         {grouped.length === 0 ? (
-          <div className="py-8 text-center text-sm text-text-400">No matches</div>
+          <div className="py-8 text-center text-sm text-text-400">{t('common:noMatches')}</div>
         ) : (
           grouped.map(({ category, items }) => (
             <div key={category} className="mb-3">
               <div className="px-3 py-1 text-[11px] font-medium text-text-400 uppercase tracking-wider">
-                {CATEGORY_LABELS[category]}
+                {t(CATEGORY_LABELS[category])}
               </div>
               {items.map(item => (
                 <KeybindingRow
@@ -271,6 +305,7 @@ export function KeybindingsSection() {
                   onEdit={setKeybinding}
                   onReset={resetKeybinding}
                   isKeyUsed={isKeyUsed}
+                  t={t}
                 />
               ))}
             </div>
@@ -280,8 +315,7 @@ export function KeybindingsSection() {
 
       {/* Help */}
       <div className="pt-3 mt-2 border-t border-border-100/50 text-[11px] text-text-400">
-        Click a shortcut to rebind. <kbd className="px-1 py-0.5 bg-bg-100 rounded font-mono text-text-300">Enter</kbd>{' '}
-        confirm, <kbd className="px-1 py-0.5 bg-bg-100 rounded font-mono text-text-300">Esc</kbd> cancel.
+        {t('keybindings.clickToRebind')}
       </div>
     </div>
   )

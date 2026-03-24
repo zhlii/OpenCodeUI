@@ -2,16 +2,20 @@
  * DiffViewer - 核心 Diff 渲染组件
  *
  * 两列架构（和 CodePreview 一致）：
- * - Gutter 列：行号 + 增删标记，固定不水平滚动
+ * - Gutter 列：change bar（3px 竖条，增绿删红）+ 行号，固定不水平滚动
  * - Content 列：代码内容，独立水平滚动
  *
- * 始终使用虚拟滚动，填满父容器（h-full）
+ * 默认使用虚拟滚动；启用自动换行后切到 wrapped 渲染
  * 大文件跳过词级别diff和语法高亮
  */
 
-import { memo, useMemo, useRef, useState, useEffect, useCallback } from 'react'
+import { memo, useMemo, useRef, useState, useEffect, useCallback, useSyncExternalStore } from 'react'
+import { useTranslation } from 'react-i18next'
 import { diffLines, diffWords } from 'diff'
 import { useSyntaxHighlight, type HighlightTokens } from '../hooks/useSyntaxHighlight'
+import { useDynamicVirtualScroll } from '../hooks/useDynamicVirtualScroll'
+import { themeStore } from '../store/themeStore'
+import type { DiffStyle } from '../store/themeStore'
 
 // ============================================
 // 常量
@@ -38,6 +42,7 @@ export interface DiffViewerProps {
   /** 不传则填满父容器 */
   maxHeight?: number
   isResizing?: boolean
+  wordWrap?: boolean
 }
 
 export type LineType = 'add' | 'delete' | 'context' | 'empty'
@@ -54,9 +59,99 @@ interface PairedLine {
   right: DiffLine
 }
 
+/** 折叠的 context 行占位 */
+interface CollapsedPairedLine {
+  collapsed: true
+  count: number
+  /** 在原始 lines 数组中的起始索引，用于展开 */
+  id: number
+}
+
+type PairedLineOrCollapsed = PairedLine | CollapsedPairedLine
+
 interface UnifiedLine extends DiffLine {
   oldLineNo?: number
   newLineNo?: number
+}
+
+interface CollapsedUnifiedLine {
+  collapsed: true
+  count: number
+  id: number
+}
+
+type UnifiedLineOrCollapsed = UnifiedLine | CollapsedUnifiedLine
+
+function isCollapsed(
+  line: PairedLineOrCollapsed | UnifiedLineOrCollapsed,
+): line is CollapsedPairedLine | CollapsedUnifiedLine {
+  return 'collapsed' in line && line.collapsed === true
+}
+
+/** 上下文行保留数：变更前后各保留 CONTEXT_LINES 行 */
+const CONTEXT_LINES = 3
+
+/** 将连续 context 行折叠，只保留变更前后各 CONTEXT_LINES 行 */
+function collapseContextPaired(lines: PairedLine[], expandedIds?: ReadonlySet<number>): PairedLineOrCollapsed[] {
+  if (lines.length === 0) return []
+
+  const result: PairedLineOrCollapsed[] = []
+  let contextStart = -1
+
+  for (let i = 0; i <= lines.length; i++) {
+    const isCtx = i < lines.length && lines[i].left.type === 'context' && lines[i].right.type === 'context'
+
+    if (isCtx) {
+      if (contextStart === -1) contextStart = i
+    } else {
+      if (contextStart !== -1) {
+        const ctxLen = i - contextStart
+        const minToCollapse = CONTEXT_LINES * 2 + 2
+        if (ctxLen > minToCollapse && !expandedIds?.has(contextStart)) {
+          for (let j = contextStart; j < contextStart + CONTEXT_LINES; j++) result.push(lines[j])
+          result.push({ collapsed: true, count: ctxLen - CONTEXT_LINES * 2, id: contextStart })
+          for (let j = i - CONTEXT_LINES; j < i; j++) result.push(lines[j])
+        } else {
+          for (let j = contextStart; j < i; j++) result.push(lines[j])
+        }
+        contextStart = -1
+      }
+      if (i < lines.length) result.push(lines[i])
+    }
+  }
+
+  return result
+}
+
+function collapseContextUnified(lines: UnifiedLine[], expandedIds?: ReadonlySet<number>): UnifiedLineOrCollapsed[] {
+  if (lines.length === 0) return []
+
+  const result: UnifiedLineOrCollapsed[] = []
+  let contextStart = -1
+
+  for (let i = 0; i <= lines.length; i++) {
+    const isCtx = i < lines.length && lines[i].type === 'context'
+
+    if (isCtx) {
+      if (contextStart === -1) contextStart = i
+    } else {
+      if (contextStart !== -1) {
+        const ctxLen = i - contextStart
+        const minToCollapse = CONTEXT_LINES * 2 + 2
+        if (ctxLen > minToCollapse && !expandedIds?.has(contextStart)) {
+          for (let j = contextStart; j < contextStart + CONTEXT_LINES; j++) result.push(lines[j])
+          result.push({ collapsed: true, count: ctxLen - CONTEXT_LINES * 2, id: contextStart })
+          for (let j = i - CONTEXT_LINES; j < i; j++) result.push(lines[j])
+        } else {
+          for (let j = contextStart; j < i; j++) result.push(lines[j])
+        }
+        contextStart = -1
+      }
+      if (i < lines.length) result.push(lines[i])
+    }
+  }
+
+  return result
 }
 
 // ============================================
@@ -79,18 +174,59 @@ function getLineBgClass(type: LineType): string {
 function getGutterBgClass(type: LineType): string {
   switch (type) {
     case 'add':
-      return 'bg-success-bg/50'
+      return 'bg-success-bg/40'
     case 'delete':
-      return 'bg-danger-bg/50'
+      return 'bg-danger-bg/40'
     case 'empty':
-      return 'bg-bg-100/50'
+      return 'bg-bg-100/30'
     default:
       return 'bg-bg-100'
   }
 }
 
+/** Change bar 样式 — 行号左侧的 3px 竖条，add 实心 / delete 虚线 */
+function getChangeBarProps(type: LineType): { className: string; style?: React.CSSProperties } {
+  switch (type) {
+    case 'add':
+      return { className: 'w-[3px] shrink-0 bg-success-100' }
+    case 'delete':
+      return {
+        className: 'w-[3px] shrink-0',
+        style: {
+          background:
+            'repeating-linear-gradient(to bottom, var(--color-danger-100) 0px, var(--color-danger-100) 2px, transparent 2px, transparent 4px)',
+        },
+      }
+    default:
+      return { className: 'w-[3px] shrink-0' }
+  }
+}
+
 function escapeHtml(str: string): string {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+/** 折叠占位条 — "N lines unchanged"，点击可展开 */
+function CollapsedBar({
+  count,
+  t,
+  onExpand,
+}: {
+  count: number
+  t: (key: string, opts?: Record<string, unknown>) => string
+  onExpand?: () => void
+}) {
+  return (
+    <div
+      className="flex items-center justify-center text-[11px] text-text-500 select-none bg-bg-200/40 border-y border-border-100/30 cursor-pointer hover:bg-bg-200/60 transition-colors"
+      style={{ height: LINE_HEIGHT + 4 }}
+      onClick={onExpand}
+    >
+      <span className="px-3 py-0.5 rounded bg-bg-300/50 text-text-400 font-mono">
+        {t('diffViewer.linesUnchanged', { count })}
+      </span>
+    </div>
+  )
 }
 
 // ============================================
@@ -104,12 +240,35 @@ export const DiffViewer = memo(function DiffViewer({
   viewMode = 'split',
   maxHeight,
   isResizing = false,
+  wordWrap,
 }: DiffViewerProps) {
+  const { diffStyle, codeWordWrap } = useSyncExternalStore(themeStore.subscribe, themeStore.getSnapshot)
+  const resolvedWordWrap = wordWrap ?? codeWordWrap
+
   // 检测大文件
   const totalLines = before.split('\n').length + after.split('\n').length
   const isLargeFile = totalLines > LARGE_FILE_LINES || before.length + after.length > LARGE_FILE_CHARS
 
-  if (viewMode === 'split') {
+  // 纯增加或纯删除时，split 模式另一边是空的没意义，自动降级为 unified
+  const isAddOnly = !before.trim()
+  const isDeleteOnly = !after.trim()
+  const effectiveViewMode = isAddOnly || isDeleteOnly ? 'unified' : viewMode
+
+  if (effectiveViewMode === 'split') {
+    if (resolvedWordWrap) {
+      return (
+        <WrappedSplitDiffView
+          before={before}
+          after={after}
+          language={language}
+          isResizing={isResizing}
+          isLargeFile={isLargeFile}
+          maxHeight={maxHeight}
+          diffStyle={diffStyle}
+        />
+      )
+    }
+
     return (
       <SplitDiffView
         before={before}
@@ -118,11 +277,186 @@ export const DiffViewer = memo(function DiffViewer({
         isResizing={isResizing}
         isLargeFile={isLargeFile}
         maxHeight={maxHeight}
+        diffStyle={diffStyle}
       />
     )
   }
+
+  if (resolvedWordWrap) {
+    return (
+      <WrappedUnifiedDiffView
+        before={before}
+        after={after}
+        language={language}
+        isResizing={isResizing}
+        isLargeFile={isLargeFile}
+        maxHeight={maxHeight}
+        diffStyle={diffStyle}
+      />
+    )
+  }
+
   return (
-    <UnifiedDiffView before={before} after={after} language={language} isResizing={isResizing} maxHeight={maxHeight} />
+    <UnifiedDiffView
+      before={before}
+      after={after}
+      language={language}
+      isResizing={isResizing}
+      maxHeight={maxHeight}
+      diffStyle={diffStyle}
+    />
+  )
+})
+
+const WrappedSplitDiffView = memo(function WrappedSplitDiffView({
+  before,
+  after,
+  language,
+  isResizing,
+  isLargeFile,
+  maxHeight,
+  diffStyle,
+}: {
+  before: string
+  after: string
+  language: string
+  isResizing: boolean
+  isLargeFile: boolean
+  maxHeight?: number
+  diffStyle: DiffStyle
+}) {
+  const { t } = useTranslation(['components', 'common'])
+
+  const shouldHighlight = !isResizing && language !== 'text' && !isLargeFile
+  const { output: beforeTokens } = useSyntaxHighlight(before, {
+    lang: language,
+    mode: 'tokens',
+    enabled: shouldHighlight,
+  })
+  const { output: afterTokens } = useSyntaxHighlight(after, {
+    lang: language,
+    mode: 'tokens',
+    enabled: shouldHighlight,
+  })
+
+  const skipWordDiff = isResizing || isLargeFile
+  const pairedLines = useMemo(() => computePairedLines(before, after, skipWordDiff), [before, after, skipWordDiff])
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(() => new Set())
+  const displayLines = useMemo(() => collapseContextPaired(pairedLines, expandedIds), [pairedLines, expandedIds])
+  const handleExpand = useCallback((id: number) => {
+    setExpandedIds(prev => {
+      const next = new Set(prev)
+      next.add(id)
+      return next
+    })
+  }, [])
+
+  const { containerRef, totalHeight, startIndex, endIndex, offsetY, handleScroll, measureRef } =
+    useDynamicVirtualScroll({ lineCount: displayLines.length, isResizing })
+
+  if (pairedLines.length === 0) {
+    return (
+      <div className="h-full flex items-center justify-center text-text-400 text-sm">{t('diffViewer.noChanges')}</div>
+    )
+  }
+
+  const useChangeBars = diffStyle === 'changeBars'
+  const gutterWidth = useChangeBars ? 35 : 52
+
+  const visibleRows: React.ReactNode[] = []
+  for (let i = startIndex; i < endIndex; i++) {
+    const item = displayLines[i]
+
+    if (isCollapsed(item)) {
+      visibleRows.push(
+        <div key={`c-${i}`} ref={el => measureRef(i, el)}>
+          <CollapsedBar count={item.count} t={t} onExpand={() => handleExpand(item.id)} />
+        </div>,
+      )
+      continue
+    }
+
+    const pair = item as PairedLine
+    visibleRows.push(
+      <div key={i} ref={el => measureRef(i, el)} className="flex items-stretch">
+        {/* Left panel */}
+        <div
+          className={`flex-1 flex items-stretch min-w-0 border-r border-border-100/30 ${getLineBgClass(pair.left.type)}`}
+        >
+          <div className={`shrink-0 ${getGutterBgClass(pair.left.type)}`} style={{ width: gutterWidth }}>
+            {useChangeBars ? (
+              <div className="flex items-stretch h-full">
+                <div {...getChangeBarProps(pair.left.type)} />
+                <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
+                  {pair.left.lineNo}
+                </div>
+              </div>
+            ) : (
+              <div className="flex h-full">
+                <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
+                  {pair.left.lineNo}
+                </div>
+                <div className="w-5 shrink-0 text-center text-[11px] leading-5 select-none">
+                  {pair.left.type === 'delete' && <span className="text-danger-100">−</span>}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div
+            className="min-w-0 flex-1 px-2 leading-5 text-[11px] whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
+            style={{ minHeight: LINE_HEIGHT }}
+          >
+            {pair.left.type !== 'empty' && <LineContent line={pair.left} tokens={beforeTokens} />}
+          </div>
+        </div>
+
+        {/* Right panel */}
+        <div className={`flex-1 flex items-stretch min-w-0 ${getLineBgClass(pair.right.type)}`}>
+          <div className={`shrink-0 ${getGutterBgClass(pair.right.type)}`} style={{ width: gutterWidth }}>
+            {useChangeBars ? (
+              <div className="flex items-stretch h-full">
+                <div {...getChangeBarProps(pair.right.type)} />
+                <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
+                  {pair.right.lineNo}
+                </div>
+              </div>
+            ) : (
+              <div className="flex h-full">
+                <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
+                  {pair.right.lineNo}
+                </div>
+                <div className="w-5 shrink-0 text-center text-[11px] leading-5 select-none">
+                  {pair.right.type === 'add' && <span className="text-success-100">+</span>}
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div
+            className="min-w-0 flex-1 px-2 leading-5 text-[11px] whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
+            style={{ minHeight: LINE_HEIGHT }}
+          >
+            {pair.right.type !== 'empty' && <LineContent line={pair.right} tokens={afterTokens} />}
+          </div>
+        </div>
+      </div>,
+    )
+  }
+
+  return (
+    <div
+      ref={containerRef}
+      className="overflow-y-auto overflow-x-hidden custom-scrollbar font-mono h-full"
+      onScroll={handleScroll}
+      style={maxHeight !== undefined ? { maxHeight } : undefined}
+    >
+      <div style={{ height: totalHeight, position: 'relative' }}>
+        <div className="absolute top-0 left-0 right-0" style={{ transform: `translateY(${offsetY}px)` }}>
+          {visibleRows}
+        </div>
+      </div>
+    </div>
   )
 })
 
@@ -149,6 +483,7 @@ const SplitDiffView = memo(function SplitDiffView({
   isResizing,
   isLargeFile,
   maxHeight,
+  diffStyle,
 }: {
   before: string
   after: string
@@ -156,7 +491,9 @@ const SplitDiffView = memo(function SplitDiffView({
   isResizing: boolean
   isLargeFile: boolean
   maxHeight?: number
+  diffStyle: DiffStyle
 }) {
+  const { t } = useTranslation(['components', 'common'])
   const containerRef = useRef<HTMLDivElement>(null)
   const leftContentRef = useRef<HTMLDivElement>(null)
   const rightContentRef = useRef<HTMLDivElement>(null)
@@ -164,6 +501,8 @@ const SplitDiffView = memo(function SplitDiffView({
   const rightScrollbarRef = useRef<HTMLDivElement>(null)
   const leftScrollSourceRef = useRef<'content' | 'scrollbar' | null>(null)
   const rightScrollSourceRef = useRef<'content' | 'scrollbar' | null>(null)
+  const maxLeftScrollWidthRef = useRef(0)
+  const maxRightScrollWidthRef = useRef(0)
   const [scrollTop, setScrollTop] = useState(0)
   const [containerHeight, setContainerHeight] = useState(300)
   const [leftContentWidth, setLeftContentWidth] = useState(0)
@@ -185,15 +524,24 @@ const SplitDiffView = memo(function SplitDiffView({
 
   const skipWordDiff = isResizing || isLargeFile
   const pairedLines = useMemo(() => computePairedLines(before, after, skipWordDiff), [before, after, skipWordDiff])
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(() => new Set())
+  const displayLines = useMemo(() => collapseContextPaired(pairedLines, expandedIds), [pairedLines, expandedIds])
+  const handleExpand = useCallback((id: number) => {
+    setExpandedIds(prev => {
+      const next = new Set(prev)
+      next.add(id)
+      return next
+    })
+  }, [])
 
-  const totalHeight = pairedLines.length * LINE_HEIGHT
+  const totalHeight = displayLines.length * LINE_HEIGHT
 
   const { startIndex, endIndex, offsetY } = useMemo(() => {
     const start = Math.max(0, Math.floor(scrollTop / LINE_HEIGHT) - OVERSCAN)
     const visibleCount = Math.ceil(containerHeight / LINE_HEIGHT)
-    const end = Math.min(pairedLines.length, start + visibleCount + OVERSCAN * 2)
+    const end = Math.min(displayLines.length, start + visibleCount + OVERSCAN * 2)
     return { startIndex: start, endIndex: end, offsetY: start * LINE_HEIGHT }
-  }, [scrollTop, containerHeight, pairedLines.length])
+  }, [scrollTop, containerHeight, displayLines.length])
 
   // 监听容器大小
   useEffect(() => {
@@ -206,23 +554,43 @@ const SplitDiffView = memo(function SplitDiffView({
     return () => resizeObserver.disconnect()
   }, [isResizing])
 
-  // 测量 content 宽度（scrollWidth vs clientWidth）
+  // 测量 content 宽度 — 追踪可见行 scrollWidth 历史最大值
   useEffect(() => {
     const leftContent = leftContentRef.current
     const rightContent = rightContentRef.current
     if (!leftContent || !rightContent) return
+    const leftInner = leftContent.firstElementChild as HTMLElement
+    const rightInner = rightContent.firstElementChild as HTMLElement
 
     const measure = () => {
-      const leftInner = leftContent.firstElementChild as HTMLElement
-      const rightInner = rightContent.firstElementChild as HTMLElement
-      if (leftInner) setLeftContentWidth(leftInner.scrollWidth)
-      if (rightInner) setRightContentWidth(rightInner.scrollWidth)
+      if (leftInner) {
+        const sw = leftInner.scrollWidth
+        if (sw > maxLeftScrollWidthRef.current) {
+          maxLeftScrollWidthRef.current = sw
+          leftInner.style.minWidth = `${sw}px`
+        }
+        setLeftContentWidth(maxLeftScrollWidthRef.current)
+      }
+      if (rightInner) {
+        const sw = rightInner.scrollWidth
+        if (sw > maxRightScrollWidthRef.current) {
+          maxRightScrollWidthRef.current = sw
+          rightInner.style.minWidth = `${sw}px`
+        }
+        setRightContentWidth(maxRightScrollWidthRef.current)
+      }
       setLeftClientWidth(leftContent.clientWidth)
       setRightClientWidth(rightContent.clientWidth)
     }
 
     measure()
-    const ro = new ResizeObserver(measure)
+    const ro = new ResizeObserver(() => {
+      maxLeftScrollWidthRef.current = 0
+      maxRightScrollWidthRef.current = 0
+      if (leftInner) leftInner.style.minWidth = ''
+      if (rightInner) rightInner.style.minWidth = ''
+      measure()
+    })
     ro.observe(leftContent)
     ro.observe(rightContent)
     const mo = new MutationObserver(measure)
@@ -232,7 +600,7 @@ const SplitDiffView = memo(function SplitDiffView({
       ro.disconnect()
       mo.disconnect()
     }
-  }, [pairedLines, startIndex, endIndex])
+  }, [displayLines, startIndex, endIndex])
 
   const handleScroll = useCallback((e: React.UIEvent<HTMLDivElement>) => {
     setScrollTop(e.currentTarget.scrollTop)
@@ -273,28 +641,67 @@ const SplitDiffView = memo(function SplitDiffView({
   }, [])
 
   if (pairedLines.length === 0) {
-    return <div className="h-full flex items-center justify-center text-text-400 text-sm">No changes</div>
+    return (
+      <div className="h-full flex items-center justify-center text-text-400 text-sm">{t('diffViewer.noChanges')}</div>
+    )
   }
 
   // 渲染可见行 — 分别生成 gutter 和 content
+  const useChangeBars = diffStyle === 'changeBars'
+  // markers: 行号(32) + 符号(20) = 52px;  changeBars: bar(3) + 行号(32) = 35px
+  const gutterWidth = useChangeBars ? 35 : 52
+
   const leftGutterRows: React.ReactNode[] = []
   const leftContentRows: React.ReactNode[] = []
   const rightGutterRows: React.ReactNode[] = []
   const rightContentRows: React.ReactNode[] = []
 
   for (let i = startIndex; i < endIndex; i++) {
-    const pair = pairedLines[i]
+    const item = displayLines[i]
 
-    // Left gutter: 行号 + 删除标记
+    if (isCollapsed(item)) {
+      const barNode = (
+        <div
+          key={i}
+          className="flex items-center justify-center text-[11px] text-text-500 select-none bg-bg-200/40 cursor-pointer hover:bg-bg-200/60 transition-colors"
+          style={{ height: LINE_HEIGHT }}
+          onClick={() => handleExpand(item.id)}
+        >
+          <span className="px-2 text-text-400 font-mono">{t('diffViewer.linesUnchanged', { count: item.count })}</span>
+        </div>
+      )
+      leftGutterRows.push(<div key={i} className="bg-bg-200/40" style={{ height: LINE_HEIGHT }} />)
+      leftContentRows.push(barNode)
+      rightGutterRows.push(<div key={i} className="bg-bg-200/40" style={{ height: LINE_HEIGHT }} />)
+      rightContentRows.push(<div key={i} className="bg-bg-200/40" style={{ height: LINE_HEIGHT }} />)
+      continue
+    }
+
+    const pair = item as PairedLine
+
+    // Left gutter
     leftGutterRows.push(
-      <div key={i} className={`flex ${getGutterBgClass(pair.left.type)}`} style={{ height: LINE_HEIGHT }}>
-        <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
-          {pair.left.lineNo}
+      useChangeBars ? (
+        <div
+          key={i}
+          className={`flex items-stretch ${getGutterBgClass(pair.left.type)}`}
+          style={{ height: LINE_HEIGHT }}
+        >
+          <div {...getChangeBarProps(pair.left.type)} />
+          <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
+            {pair.left.lineNo}
+          </div>
         </div>
-        <div className="w-5 shrink-0 text-center text-[11px] leading-5 select-none">
-          {pair.left.type === 'delete' && <span className="text-danger-100">−</span>}
+      ) : (
+        <div key={i} className={`flex ${getGutterBgClass(pair.left.type)}`} style={{ height: LINE_HEIGHT }}>
+          <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
+            {pair.left.lineNo}
+          </div>
+          <div className="w-5 shrink-0 text-center text-[11px] leading-5 select-none">
+            {pair.left.type === 'delete' && <span className="text-danger-100">−</span>}
+          </div>
         </div>
-      </div>,
+      ),
     )
 
     // Left content: 代码
@@ -310,14 +717,27 @@ const SplitDiffView = memo(function SplitDiffView({
 
     // Right gutter
     rightGutterRows.push(
-      <div key={i} className={`flex ${getGutterBgClass(pair.right.type)}`} style={{ height: LINE_HEIGHT }}>
-        <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
-          {pair.right.lineNo}
+      useChangeBars ? (
+        <div
+          key={i}
+          className={`flex items-stretch ${getGutterBgClass(pair.right.type)}`}
+          style={{ height: LINE_HEIGHT }}
+        >
+          <div {...getChangeBarProps(pair.right.type)} />
+          <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
+            {pair.right.lineNo}
+          </div>
         </div>
-        <div className="w-5 shrink-0 text-center text-[11px] leading-5 select-none">
-          {pair.right.type === 'add' && <span className="text-success-100">+</span>}
+      ) : (
+        <div key={i} className={`flex ${getGutterBgClass(pair.right.type)}`} style={{ height: LINE_HEIGHT }}>
+          <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
+            {pair.right.lineNo}
+          </div>
+          <div className="w-5 shrink-0 text-center text-[11px] leading-5 select-none">
+            {pair.right.type === 'add' && <span className="text-success-100">+</span>}
+          </div>
         </div>
-      </div>,
+      ),
     )
 
     // Right content
@@ -344,7 +764,7 @@ const SplitDiffView = memo(function SplitDiffView({
           {/* 左面板 */}
           <div className="flex-1 flex min-w-0 border-r border-border-100/30">
             {/* 左 gutter */}
-            <div className="shrink-0 overflow-hidden" style={{ width: 52 /* 32+20 */ }}>
+            <div className="shrink-0 overflow-hidden" style={{ width: gutterWidth }}>
               {leftGutterRows}
             </div>
             {/* 左 content — 隐藏自身滚动条，由 proxy 控制 */}
@@ -360,7 +780,7 @@ const SplitDiffView = memo(function SplitDiffView({
           {/* 右面板 */}
           <div className="flex-1 flex min-w-0">
             {/* 右 gutter */}
-            <div className="shrink-0 overflow-hidden" style={{ width: 52 }}>
+            <div className="shrink-0 overflow-hidden" style={{ width: gutterWidth }}>
               {rightGutterRows}
             </div>
             {/* 右 content */}
@@ -377,20 +797,28 @@ const SplitDiffView = memo(function SplitDiffView({
 
       {/* Sticky proxy 横向滚动条 — 只在内容实际溢出时显示 */}
       {(leftContentWidth > leftClientWidth || rightContentWidth > rightClientWidth) && (
-        <div className="sticky bottom-0 z-10 flex bg-bg-100/90 backdrop-blur-sm">
-          <div
-            ref={leftScrollbarRef}
-            className="flex-1 overflow-x-auto code-scrollbar border-r border-border-100/30"
-            onScroll={handleLeftScrollbar}
-          >
-            <div style={{ width: leftContentWidth, height: 1 }} />
+        <div className="sticky bottom-0 z-10 flex">
+          {/* 左面板: gutter 占位 + scrollbar */}
+          <div className="flex-1 flex min-w-0 border-r border-border-100/30">
+            <div className="shrink-0" style={{ width: gutterWidth }} />
+            <div
+              ref={leftScrollbarRef}
+              className="flex-1 min-w-0 overflow-x-auto code-scrollbar"
+              onScroll={handleLeftScrollbar}
+            >
+              <div style={{ width: leftContentWidth, height: 1 }} />
+            </div>
           </div>
-          <div
-            ref={rightScrollbarRef}
-            className="flex-1 overflow-x-auto code-scrollbar"
-            onScroll={handleRightScrollbar}
-          >
-            <div style={{ width: rightContentWidth, height: 1 }} />
+          {/* 右面板: gutter 占位 + scrollbar */}
+          <div className="flex-1 flex min-w-0">
+            <div className="shrink-0" style={{ width: gutterWidth }} />
+            <div
+              ref={rightScrollbarRef}
+              className="flex-1 min-w-0 overflow-x-auto code-scrollbar"
+              onScroll={handleRightScrollbar}
+            >
+              <div style={{ width: rightContentWidth, height: 1 }} />
+            </div>
           </div>
         </div>
       )}
@@ -406,7 +834,9 @@ const SplitDiffView = memo(function SplitDiffView({
 //     高度占位 (height: totalHeight, relative) — 虚拟滚动
 //       absolute div (translateY: offsetY) — 可见行
 //         flex row
-//           gutter (shrink-0, overflow: hidden): oldLineNo | newLineNo | +/-
+//           gutter (shrink-0, overflow: hidden):
+//             markers 模式: oldLineNo | newLineNo | +/-
+//             changeBars 模式: changeBar | oldLineNo | newLineNo
 //           content (flex-1, overflow-x: auto, scrollbar-none): 代码
 //             inline-block min-w-full — 被最宽行撑开
 //     sticky proxy scrollbar (bottom: 0) — 可见的横向滚动条
@@ -418,17 +848,21 @@ const UnifiedDiffView = memo(function UnifiedDiffView({
   language,
   isResizing,
   maxHeight,
+  diffStyle,
 }: {
   before: string
   after: string
   language: string
   isResizing: boolean
   maxHeight?: number
+  diffStyle: DiffStyle
 }) {
+  const { t } = useTranslation(['components', 'common'])
   const containerRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const scrollbarRef = useRef<HTMLDivElement>(null)
   const scrollSourceRef = useRef<'content' | 'scrollbar' | null>(null)
+  const maxScrollWidthRef = useRef(0)
   const [scrollTop, setScrollTop] = useState(0)
   const [containerHeight, setContainerHeight] = useState(300)
   const [contentWidth, setContentWidth] = useState(0)
@@ -447,15 +881,24 @@ const UnifiedDiffView = memo(function UnifiedDiffView({
   })
 
   const lines = useMemo(() => computeUnifiedLines(before, after), [before, after])
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(() => new Set())
+  const displayLines = useMemo(() => collapseContextUnified(lines, expandedIds), [lines, expandedIds])
+  const handleExpand = useCallback((id: number) => {
+    setExpandedIds(prev => {
+      const next = new Set(prev)
+      next.add(id)
+      return next
+    })
+  }, [])
 
-  const totalHeight = lines.length * LINE_HEIGHT
+  const totalHeight = displayLines.length * LINE_HEIGHT
 
   const { startIndex, endIndex, offsetY } = useMemo(() => {
     const start = Math.max(0, Math.floor(scrollTop / LINE_HEIGHT) - OVERSCAN)
     const visibleCount = Math.ceil(containerHeight / LINE_HEIGHT)
-    const end = Math.min(lines.length, start + visibleCount + OVERSCAN * 2)
+    const end = Math.min(displayLines.length, start + visibleCount + OVERSCAN * 2)
     return { startIndex: start, endIndex: end, offsetY: start * LINE_HEIGHT }
-  }, [scrollTop, containerHeight, lines.length])
+  }, [scrollTop, containerHeight, displayLines.length])
 
   useEffect(() => {
     const container = containerRef.current
@@ -467,19 +910,30 @@ const UnifiedDiffView = memo(function UnifiedDiffView({
     return () => resizeObserver.disconnect()
   }, [isResizing])
 
-  // 测量 content 宽度（scrollWidth vs clientWidth）
+  // 测量 content 宽度 — 追踪可见行 scrollWidth 历史最大值
   useEffect(() => {
     const content = contentRef.current
     if (!content) return
+    const inner = content.firstElementChild as HTMLElement
 
     const measure = () => {
-      const inner = content.firstElementChild as HTMLElement
-      if (inner) setContentWidth(inner.scrollWidth)
+      if (inner) {
+        const sw = inner.scrollWidth
+        if (sw > maxScrollWidthRef.current) {
+          maxScrollWidthRef.current = sw
+          inner.style.minWidth = `${sw}px`
+        }
+        setContentWidth(maxScrollWidthRef.current)
+      }
       setContentClientWidth(content.clientWidth)
     }
 
     measure()
-    const ro = new ResizeObserver(measure)
+    const ro = new ResizeObserver(() => {
+      maxScrollWidthRef.current = 0
+      if (inner) inner.style.minWidth = ''
+      measure()
+    })
     ro.observe(content)
     const mo = new MutationObserver(measure)
     mo.observe(content, { childList: true, subtree: true })
@@ -512,17 +966,38 @@ const UnifiedDiffView = memo(function UnifiedDiffView({
   }, [])
 
   if (lines.length === 0) {
-    return <div className="h-full flex items-center justify-center text-text-400 text-sm">No changes</div>
+    return (
+      <div className="h-full flex items-center justify-center text-text-400 text-sm">{t('diffViewer.noChanges')}</div>
+    )
   }
 
-  // gutter 宽度: oldLineNo(32px) + newLineNo(32px) + 标记(20px) = 84px
-  const GUTTER_WIDTH = 84
+  // markers: oldLineNo(32) + newLineNo(32) + 符号(20) = 84px
+  // changeBars: bar(3) + oldLineNo(32) + newLineNo(32) = 67px
+  const useChangeBars = diffStyle === 'changeBars'
+  const GUTTER_WIDTH = useChangeBars ? 67 : 84
 
   const gutterRows: React.ReactNode[] = []
   const contentRows: React.ReactNode[] = []
 
   for (let i = startIndex; i < endIndex; i++) {
-    const line = lines[i]
+    const item = displayLines[i]
+
+    if (isCollapsed(item)) {
+      gutterRows.push(<div key={i} className="bg-bg-200/40" style={{ height: LINE_HEIGHT }} />)
+      contentRows.push(
+        <div
+          key={i}
+          className="flex items-center text-[11px] text-text-500 select-none bg-bg-200/40 cursor-pointer hover:bg-bg-200/60 transition-colors"
+          style={{ height: LINE_HEIGHT }}
+          onClick={() => handleExpand(item.id)}
+        >
+          <span className="px-2 text-text-400 font-mono">{t('diffViewer.linesUnchanged', { count: item.count })}</span>
+        </div>,
+      )
+      continue
+    }
+
+    const line = item as UnifiedLine
     let tokens: HighlightTokens | null = null
     let lineNo: number | undefined
     if (line.type === 'delete' && line.oldLineNo) {
@@ -533,20 +1008,32 @@ const UnifiedDiffView = memo(function UnifiedDiffView({
       lineNo = line.newLineNo
     }
 
-    // Gutter 行: oldLineNo | newLineNo | +/-
+    // Gutter 行
     gutterRows.push(
-      <div key={i} className={`flex ${getGutterBgClass(line.type)}`} style={{ height: LINE_HEIGHT }}>
-        <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
-          {line.oldLineNo}
+      useChangeBars ? (
+        <div key={i} className={`flex items-stretch ${getGutterBgClass(line.type)}`} style={{ height: LINE_HEIGHT }}>
+          <div {...getChangeBarProps(line.type)} />
+          <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
+            {line.oldLineNo}
+          </div>
+          <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
+            {line.newLineNo}
+          </div>
         </div>
-        <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
-          {line.newLineNo}
+      ) : (
+        <div key={i} className={`flex ${getGutterBgClass(line.type)}`} style={{ height: LINE_HEIGHT }}>
+          <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
+            {line.oldLineNo}
+          </div>
+          <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
+            {line.newLineNo}
+          </div>
+          <div className="w-5 shrink-0 text-center text-[11px] leading-5 select-none">
+            {line.type === 'add' && <span className="text-success-100">+</span>}
+            {line.type === 'delete' && <span className="text-danger-100">−</span>}
+          </div>
         </div>
-        <div className="w-5 shrink-0 text-center text-[11px] leading-5 select-none">
-          {line.type === 'add' && <span className="text-success-100">+</span>}
-          {line.type === 'delete' && <span className="text-danger-100">−</span>}
-        </div>
-      </div>,
+      ),
     )
 
     // Content 行
@@ -589,13 +1076,147 @@ const UnifiedDiffView = memo(function UnifiedDiffView({
 
       {/* Sticky proxy 横向滚动条 — 只在内容实际溢出时显示 */}
       {contentWidth > contentClientWidth && (
-        <div className="sticky bottom-0 z-10 flex bg-bg-100/90 backdrop-blur-sm">
+        <div className="sticky bottom-0 z-10 flex">
           <div className="shrink-0" style={{ width: GUTTER_WIDTH }} />
           <div ref={scrollbarRef} className="flex-1 min-w-0 overflow-x-auto code-scrollbar" onScroll={handleScrollbar}>
             <div style={{ width: contentWidth, height: 1 }} />
           </div>
         </div>
       )}
+    </div>
+  )
+})
+
+const WrappedUnifiedDiffView = memo(function WrappedUnifiedDiffView({
+  before,
+  after,
+  language,
+  isResizing,
+  isLargeFile,
+  maxHeight,
+  diffStyle,
+}: {
+  before: string
+  after: string
+  language: string
+  isResizing: boolean
+  isLargeFile: boolean
+  maxHeight?: number
+  diffStyle: DiffStyle
+}) {
+  const { t } = useTranslation(['components', 'common'])
+
+  const shouldHighlight = !isResizing && language !== 'text' && !isLargeFile
+  const { output: beforeTokens } = useSyntaxHighlight(before, {
+    lang: language,
+    mode: 'tokens',
+    enabled: shouldHighlight,
+  })
+  const { output: afterTokens } = useSyntaxHighlight(after, {
+    lang: language,
+    mode: 'tokens',
+    enabled: shouldHighlight,
+  })
+
+  const lines = useMemo(() => computeUnifiedLines(before, after), [before, after])
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(() => new Set())
+  const displayLines = useMemo(() => collapseContextUnified(lines, expandedIds), [lines, expandedIds])
+  const handleExpand = useCallback((id: number) => {
+    setExpandedIds(prev => {
+      const next = new Set(prev)
+      next.add(id)
+      return next
+    })
+  }, [])
+
+  const { containerRef, totalHeight, startIndex, endIndex, offsetY, handleScroll, measureRef } =
+    useDynamicVirtualScroll({ lineCount: displayLines.length, isResizing })
+
+  if (lines.length === 0) {
+    return (
+      <div className="h-full flex items-center justify-center text-text-400 text-sm">{t('diffViewer.noChanges')}</div>
+    )
+  }
+
+  const useChangeBars = diffStyle === 'changeBars'
+  const gutterWidth = useChangeBars ? 67 : 84
+
+  const visibleRows: React.ReactNode[] = []
+  for (let i = startIndex; i < endIndex; i++) {
+    const item = displayLines[i]
+
+    if (isCollapsed(item)) {
+      visibleRows.push(
+        <div key={`c-${i}`} ref={el => measureRef(i, el)}>
+          <CollapsedBar count={item.count} t={t} onExpand={() => handleExpand(item.id)} />
+        </div>,
+      )
+      continue
+    }
+
+    const line = item as UnifiedLine
+    let tokens: HighlightTokens | null = null
+    let lineNo: number | undefined
+
+    if (line.type === 'delete' && line.oldLineNo) {
+      tokens = beforeTokens
+      lineNo = line.oldLineNo
+    } else if ((line.type === 'add' || line.type === 'context') && line.newLineNo) {
+      tokens = afterTokens
+      lineNo = line.newLineNo
+    }
+
+    visibleRows.push(
+      <div key={i} ref={el => measureRef(i, el)} className={`flex items-stretch ${getLineBgClass(line.type)}`}>
+        <div className={`shrink-0 ${getGutterBgClass(line.type)}`} style={{ width: gutterWidth }}>
+          {useChangeBars ? (
+            <div className="flex items-stretch h-full">
+              <div {...getChangeBarProps(line.type)} />
+              <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
+                {line.oldLineNo}
+              </div>
+              <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
+                {line.newLineNo}
+              </div>
+            </div>
+          ) : (
+            <div className="flex h-full">
+              <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
+                {line.oldLineNo}
+              </div>
+              <div className="w-8 shrink-0 px-1 text-right text-text-500 text-[11px] leading-5 select-none opacity-60">
+                {line.newLineNo}
+              </div>
+              <div className="w-5 shrink-0 text-center text-[11px] leading-5 select-none">
+                {line.type === 'add' && <span className="text-success-100">+</span>}
+                {line.type === 'delete' && <span className="text-danger-100">−</span>}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div
+          className="min-w-0 flex-1 px-2 leading-5 text-[11px] whitespace-pre-wrap break-words [overflow-wrap:anywhere]"
+          style={{ minHeight: LINE_HEIGHT }}
+        >
+          <LineContent line={{ ...line, lineNo }} tokens={tokens} />
+        </div>
+      </div>,
+    )
+  }
+
+  return (
+    <div
+      ref={containerRef}
+      className="overflow-y-auto overflow-x-hidden custom-scrollbar font-mono h-full"
+      onScroll={handleScroll}
+      style={maxHeight !== undefined ? { maxHeight } : undefined}
+    >
+      <div style={{ height: totalHeight, position: 'relative' }}>
+        <div className="absolute top-0 left-0 right-0" style={{ transform: `translateY(${offsetY}px)` }}>
+          {visibleRows}
+        </div>
+      </div>
     </div>
   )
 })

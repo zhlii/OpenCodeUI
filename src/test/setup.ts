@@ -1,4 +1,5 @@
 import '@testing-library/jest-dom/vitest'
+import '../i18n'
 
 if (typeof globalThis.localStorage === 'undefined' || typeof globalThis.localStorage.getItem !== 'function') {
   let storage = new Map<string, string>()

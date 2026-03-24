@@ -21,7 +21,7 @@ export const TextPartView = memo(function TextPartView({ part, isStreaming = fal
 
   return (
     <div>
-      <MarkdownRenderer content={displayText} />
+      <MarkdownRenderer content={displayText} isStreaming={isStreaming} />
     </div>
   )
 })

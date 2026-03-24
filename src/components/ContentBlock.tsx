@@ -8,6 +8,7 @@
  */
 
 import { memo, useState, useMemo, useEffect, useRef } from 'react'
+import { useTranslation } from 'react-i18next'
 import { diffLines } from 'diff'
 import { ChevronDownIcon, ChevronRightIcon, MaximizeIcon } from './Icons'
 import { CopyButton } from './ui'
@@ -16,6 +17,7 @@ import { CodePreview } from './CodePreview'
 import { detectLanguage } from '../utils/languageUtils'
 import { FullscreenViewer } from './FullscreenViewer'
 import { extractContentFromUnifiedDiff } from '../utils/diffUtils'
+import { useResponsiveMaxHeight } from '../hooks/useResponsiveMaxHeight'
 
 // ============================================
 // Types
@@ -36,6 +38,8 @@ export interface ContentBlockProps {
   maxHeight?: number
   /** 是否可折叠 */
   collapsible?: boolean
+  /** 精简模式：header 和代码行等高（20px），不可折叠 */
+  compact?: boolean
 
   // 内容
   /** 普通文本/代码内容 */
@@ -64,24 +68,31 @@ export const ContentBlock = memo(function ContentBlock({
   language,
   variant = 'default',
   defaultCollapsed = false,
-  maxHeight = 400,
+  maxHeight: maxHeightProp,
   collapsible = true,
+  compact = false,
   content,
   diff,
   diffStats: providedDiffStats,
   stats,
   isLoading = false,
-  loadingText = 'Loading...',
+  loadingText,
 }: ContentBlockProps) {
-  const [collapsed, setCollapsed] = useState(defaultCollapsed)
+  const { t } = useTranslation(['components', 'common'])
+  const resolvedLoadingText = loadingText ?? t('common:loading')
+  const [collapsed, setCollapsed] = useState(compact ? false : defaultCollapsed)
   const [fullscreenOpen, setFullscreenOpen] = useState(false)
   const [diffViewMode, setDiffViewMode] = useState<ViewMode>('split')
   const contentRef = useRef<HTMLDivElement>(null)
 
+  // 响应式 maxHeight，外部传入的值优先
+  const responsiveMaxHeight = useResponsiveMaxHeight()
+
   const isError = variant === 'error'
+  const maxHeight = maxHeightProp ?? responsiveMaxHeight
   const isDiff = !!diff
   const hasContent = !!content?.trim() || isDiff || stats?.exit !== undefined
-  const canCollapse = collapsible && hasContent
+  const canCollapse = !compact && collapsible && hasContent
   const lang = language || (filePath ? detectLanguage(filePath) : 'text')
   const fileName = filePath?.split(/[/\\]/).pop()
 
@@ -140,17 +151,21 @@ export const ContentBlock = memo(function ContentBlock({
   // 是否展开内容区
   const showBody = (hasContent && !collapsed) || (isLoading && !hasContent)
 
+  // 容器样式
+  const containerClass = isError
+    ? 'border border-danger-100/30 bg-danger-100/5'
+    : 'bg-bg-100 border border-border-200/40'
+
+  // Header 样式
+  const headerClass = isError ? 'bg-danger-100/8 hover:bg-danger-100/12' : 'bg-bg-200/40 hover:bg-bg-200/60'
+
   return (
-    <div
-      className={`rounded-lg overflow-hidden text-xs contain-content ${
-        isError ? 'border border-danger-100/30 bg-danger-100/5' : 'bg-bg-100/80 border border-border-200/40'
-      }`}
-    >
+    <div className={`rounded-lg overflow-hidden text-xs contain-content ${containerClass}`}>
       {/* Header */}
       <div
         className={`flex items-center gap-2 px-3 h-8 select-none transition-colors ${
           canCollapse ? 'cursor-pointer' : ''
-        } ${isError ? 'bg-danger-100/8 hover:bg-danger-100/12' : 'bg-bg-200/40 hover:bg-bg-200/60'}`}
+        } ${headerClass}`}
         onClick={canCollapse ? () => setCollapsed(!collapsed) : undefined}
       >
         {/* Left: chevron + label + filename */}
@@ -173,7 +188,7 @@ export const ContentBlock = memo(function ContentBlock({
           {isLoading && (
             <div className="flex items-center gap-1.5 text-text-400 ml-1">
               <div className="w-3 h-3 border-2 border-accent-main-100/30 border-t-accent-main-100 rounded-full animate-spin" />
-              {loadingText && <span>{loadingText}</span>}
+              {resolvedLoadingText && <span>{resolvedLoadingText}</span>}
             </div>
           )}
         </div>
@@ -186,7 +201,7 @@ export const ContentBlock = memo(function ContentBlock({
               {diffStats.additions > 0 && <span className="text-success-100">+{diffStats.additions}</span>}
               {diffStats.deletions > 0 && <span className="text-danger-100">-{diffStats.deletions}</span>}
               {diffStats.additions === 0 && diffStats.deletions === 0 && (
-                <span className="text-text-500">No changes</span>
+                <span className="text-text-500">{t('common:noChanges')}</span>
               )}
             </div>
           )}
@@ -199,7 +214,7 @@ export const ContentBlock = memo(function ContentBlock({
                 e.stopPropagation()
                 setFullscreenOpen(true)
               }}
-              title="Fullscreen"
+              title={t('contentBlock.fullscreen')}
             >
               <MaximizeIcon size={13} />
             </button>
@@ -212,7 +227,7 @@ export const ContentBlock = memo(function ContentBlock({
                 stats.exit === 0 ? 'text-accent-secondary-100' : 'text-warning-100'
               }`}
             >
-              exit {stats.exit}
+              {t('contentBlock.exitCode', { code: stats.exit })}
             </span>
           )}
         </div>

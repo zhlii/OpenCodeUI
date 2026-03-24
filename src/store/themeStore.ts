@@ -63,7 +63,10 @@ export interface StepFinishDisplay {
   turnDuration: boolean
 }
 
-export type ReasoningDisplayMode = 'capsule' | 'italic'
+export type ReasoningDisplayMode = 'capsule' | 'italic' | 'markdown'
+
+/** Diff 行标记风格：markers = 传统 +/- 符号, changeBars = 行号左侧彩色竖条 */
+export type DiffStyle = 'markers' | 'changeBars'
 
 const DEFAULT_STEP_FINISH_DISPLAY: StepFinishDisplay = {
   tokens: true,
@@ -74,6 +77,16 @@ const DEFAULT_STEP_FINISH_DISPLAY: StepFinishDisplay = {
 }
 
 const DEFAULT_REASONING_DISPLAY_MODE: ReasoningDisplayMode = 'capsule'
+const DEFAULT_DIFF_STYLE: DiffStyle = 'markers'
+const DEFAULT_DESCRIPTIVE_TOOL_STEPS = false
+const DEFAULT_INLINE_TOOL_REQUESTS = false
+const DEFAULT_CODE_WORD_WRAP = false
+
+/** 工具输出渲染风格：classic = 经典（input+output 分离），compact = 精简（只展示 output，header 更矮） */
+export type ToolCardStyle = 'classic' | 'compact'
+const DEFAULT_TOOL_CARD_STYLE: ToolCardStyle = 'classic'
+const DEFAULT_IMMERSIVE_MODE = false
+const DEFAULT_COMPACT_INLINE_PERMISSION = false
 
 export interface ThemeState {
   /** 当前选中的主题风格 ID */
@@ -90,6 +103,20 @@ export interface ThemeState {
   reasoningDisplayMode: ReasoningDisplayMode
   /** 宽模式 */
   wideMode: boolean
+  /** Diff 行标记风格 */
+  diffStyle: DiffStyle
+  /** 是否启用带工具描述的 steps 摘要 */
+  descriptiveToolSteps: boolean
+  /** 是否在工具下方内嵌权限/提问请求 */
+  inlineToolRequests: boolean
+  /** 代码块/diff 自动换行 */
+  codeWordWrap: boolean
+  /** 工具输出渲染风格 */
+  toolCardStyle: ToolCardStyle
+  /** 沉浸模式 */
+  immersiveMode: boolean
+  /** 内嵌权限精简模式：ToolBody 有内容时只显示操作按钮 */
+  compactInlinePermission: boolean
 }
 
 // ============================================
@@ -103,6 +130,13 @@ const STORAGE_KEY_COLLAPSE_USER_MESSAGES = 'collapse-user-messages'
 const STORAGE_KEY_STEP_FINISH_DISPLAY = 'step-finish-display'
 const STORAGE_KEY_REASONING_DISPLAY_MODE = 'reasoning-display-mode'
 const STORAGE_KEY_WIDE_MODE = 'chat-wide-mode'
+const STORAGE_KEY_DIFF_STYLE = 'diff-style'
+const STORAGE_KEY_DESCRIPTIVE_TOOL_STEPS = 'descriptive-tool-steps'
+const STORAGE_KEY_INLINE_TOOL_REQUESTS = 'inline-tool-requests'
+const STORAGE_KEY_CODE_WORD_WRAP = 'code-word-wrap'
+const STORAGE_KEY_TOOL_CARD_STYLE = 'tool-card-style'
+const STORAGE_KEY_IMMERSIVE_MODE = 'immersive-mode'
+const STORAGE_KEY_COMPACT_INLINE_PERMISSION = 'compact-inline-permission'
 
 // ============================================
 // DOM Style Element IDs
@@ -127,7 +161,9 @@ class ThemeStore {
     const collapseUserMessages = savedCollapse === null ? true : savedCollapse === 'true'
     const savedReasoningDisplay = localStorage.getItem(STORAGE_KEY_REASONING_DISPLAY_MODE)
     const reasoningDisplayMode: ReasoningDisplayMode =
-      savedReasoningDisplay === 'italic' ? 'italic' : DEFAULT_REASONING_DISPLAY_MODE
+      savedReasoningDisplay === 'italic' || savedReasoningDisplay === 'markdown'
+        ? savedReasoningDisplay
+        : DEFAULT_REASONING_DISPLAY_MODE
 
     let stepFinishDisplay = DEFAULT_STEP_FINISH_DISPLAY
     try {
@@ -138,6 +174,34 @@ class ThemeStore {
     }
 
     const savedWideMode = localStorage.getItem(STORAGE_KEY_WIDE_MODE) === 'true'
+    const savedDiffStyle = localStorage.getItem(STORAGE_KEY_DIFF_STYLE) as DiffStyle | null
+    const diffStyle: DiffStyle = savedDiffStyle === 'changeBars' ? 'changeBars' : DEFAULT_DIFF_STYLE
+
+    const savedDescriptiveToolSteps = localStorage.getItem(STORAGE_KEY_DESCRIPTIVE_TOOL_STEPS)
+    const descriptiveToolSteps =
+      savedDescriptiveToolSteps === null ? DEFAULT_DESCRIPTIVE_TOOL_STEPS : savedDescriptiveToolSteps === 'true'
+
+    const savedInlineToolRequests = localStorage.getItem(STORAGE_KEY_INLINE_TOOL_REQUESTS)
+    const inlineToolRequests =
+      savedInlineToolRequests === null ? DEFAULT_INLINE_TOOL_REQUESTS : savedInlineToolRequests === 'true'
+
+    const savedCodeWordWrap = localStorage.getItem(STORAGE_KEY_CODE_WORD_WRAP)
+    const codeWordWrap = savedCodeWordWrap === 'true' ? true : DEFAULT_CODE_WORD_WRAP
+
+    const savedToolCardStyle = localStorage.getItem(STORAGE_KEY_TOOL_CARD_STYLE) as ToolCardStyle | null
+    const toolCardStyle: ToolCardStyle =
+      savedToolCardStyle === 'classic' || savedToolCardStyle === 'compact'
+        ? savedToolCardStyle
+        : DEFAULT_TOOL_CARD_STYLE
+
+    const savedImmersiveMode = localStorage.getItem(STORAGE_KEY_IMMERSIVE_MODE)
+    const immersiveMode = savedImmersiveMode === 'true' ? true : DEFAULT_IMMERSIVE_MODE
+
+    const savedCompactInlinePermission = localStorage.getItem(STORAGE_KEY_COMPACT_INLINE_PERMISSION)
+    const compactInlinePermission =
+      savedCompactInlinePermission === null
+        ? DEFAULT_COMPACT_INLINE_PERMISSION
+        : savedCompactInlinePermission === 'true'
 
     this.state = {
       presetId: savedPreset,
@@ -147,6 +211,13 @@ class ThemeStore {
       stepFinishDisplay,
       reasoningDisplayMode,
       wideMode: savedWideMode,
+      diffStyle,
+      descriptiveToolSteps,
+      inlineToolRequests,
+      codeWordWrap,
+      toolCardStyle,
+      immersiveMode,
+      compactInlinePermission,
     }
   }
 
@@ -176,6 +247,27 @@ class ThemeStore {
   }
   get wideMode() {
     return this.state.wideMode
+  }
+  get diffStyle() {
+    return this.state.diffStyle
+  }
+  get descriptiveToolSteps() {
+    return this.state.descriptiveToolSteps
+  }
+  get inlineToolRequests() {
+    return this.state.inlineToolRequests
+  }
+  get codeWordWrap() {
+    return this.state.codeWordWrap
+  }
+  get toolCardStyle() {
+    return this.state.toolCardStyle
+  }
+  get immersiveMode() {
+    return this.state.immersiveMode
+  }
+  get compactInlinePermission() {
+    return this.state.compactInlinePermission
   }
 
   /** 获取当前主题预设（内置主题返回对象，自定义返回 undefined） */
@@ -265,6 +357,67 @@ class ThemeStore {
 
   toggleWideMode() {
     this.setWideMode(!this.state.wideMode)
+  }
+
+  setDiffStyle(style: DiffStyle) {
+    if (this.state.diffStyle === style) return
+    this.state = { ...this.state, diffStyle: style }
+    localStorage.setItem(STORAGE_KEY_DIFF_STYLE, style)
+    this.emit()
+  }
+
+  setDescriptiveToolSteps(enabled: boolean) {
+    if (this.state.descriptiveToolSteps === enabled) return
+    this.state = { ...this.state, descriptiveToolSteps: enabled }
+    localStorage.setItem(STORAGE_KEY_DESCRIPTIVE_TOOL_STEPS, String(enabled))
+    this.emit()
+  }
+
+  setInlineToolRequests(enabled: boolean) {
+    if (this.state.inlineToolRequests === enabled) return
+    this.state = { ...this.state, inlineToolRequests: enabled }
+    localStorage.setItem(STORAGE_KEY_INLINE_TOOL_REQUESTS, String(enabled))
+    this.emit()
+  }
+
+  setCodeWordWrap(enabled: boolean) {
+    if (this.state.codeWordWrap === enabled) return
+    this.state = { ...this.state, codeWordWrap: enabled }
+    localStorage.setItem(STORAGE_KEY_CODE_WORD_WRAP, String(enabled))
+    this.emit()
+  }
+
+  setToolCardStyle(style: ToolCardStyle) {
+    if (this.state.toolCardStyle === style) return
+    this.state = { ...this.state, toolCardStyle: style }
+    localStorage.setItem(STORAGE_KEY_TOOL_CARD_STYLE, style)
+    this.emit()
+  }
+
+  setImmersiveMode(enabled: boolean) {
+    if (this.state.immersiveMode === enabled) return
+    this.state = {
+      ...this.state,
+      immersiveMode: enabled,
+      // 联动四个子功能
+      inlineToolRequests: enabled,
+      descriptiveToolSteps: enabled,
+      toolCardStyle: enabled ? 'compact' : 'classic',
+      compactInlinePermission: enabled,
+    }
+    localStorage.setItem(STORAGE_KEY_IMMERSIVE_MODE, String(enabled))
+    localStorage.setItem(STORAGE_KEY_INLINE_TOOL_REQUESTS, String(enabled))
+    localStorage.setItem(STORAGE_KEY_DESCRIPTIVE_TOOL_STEPS, String(enabled))
+    localStorage.setItem(STORAGE_KEY_TOOL_CARD_STYLE, enabled ? 'compact' : 'classic')
+    localStorage.setItem(STORAGE_KEY_COMPACT_INLINE_PERMISSION, String(enabled))
+    this.emit()
+  }
+
+  setCompactInlinePermission(enabled: boolean) {
+    if (this.state.compactInlinePermission === enabled) return
+    this.state = { ...this.state, compactInlinePermission: enabled }
+    localStorage.setItem(STORAGE_KEY_COMPACT_INLINE_PERMISSION, String(enabled))
+    this.emit()
   }
 
   // ---- Theme Application ----

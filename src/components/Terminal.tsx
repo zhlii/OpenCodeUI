@@ -3,7 +3,7 @@
 // 使用 xterm.js + WebSocket 连接后端 PTY
 // ============================================
 
-import { useEffect, useRef, memo, useState } from 'react'
+import { useEffect, useRef, memo, useState, useCallback } from 'react'
 import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
@@ -117,6 +117,152 @@ function isMobileDevice(): boolean {
 }
 
 // ============================================
+// Mobile Extra Keys Toolbar
+// 参考 Termux / Moshi / Blink Shell 业界方案
+// CTRL / ALT 为粘滞修饰键，点击激活后下一次按键自动附带
+// ============================================
+
+type StickyModifier = 'ctrl' | 'alt' | null
+
+type ModifierKey = Exclude<StickyModifier, null>
+
+interface MobileExtraKey {
+  data?: string
+  label: string
+  modifier?: ModifierKey
+}
+
+const MOBILE_EXTRA_KEY_ROWS: MobileExtraKey[][] = [
+  [
+    { label: 'ESC', data: '\x1b' },
+    { label: '/', data: '/' },
+    { label: '-', data: '-' },
+    { label: 'HOME', data: '\x1b[H' },
+    { label: '↑', data: '\x1b[A' },
+    { label: 'END', data: '\x1b[F' },
+    { label: 'PGUP', data: '\x1b[5~' },
+  ],
+  [
+    { label: 'TAB', data: '\t' },
+    { label: 'CTRL', modifier: 'ctrl' },
+    { label: 'ALT', modifier: 'alt' },
+    { label: '←', data: '\x1b[D' },
+    { label: '↓', data: '\x1b[B' },
+    { label: '→', data: '\x1b[C' },
+    { label: 'PGDN', data: '\x1b[6~' },
+  ],
+]
+
+function toCtrlSequence(data: string): string {
+  if (data.length !== 1) return data
+
+  const upper = data.toUpperCase()
+  if (upper >= 'A' && upper <= 'Z') {
+    return String.fromCharCode(upper.charCodeAt(0) - 64)
+  }
+
+  switch (data) {
+    case ' ':
+    case '@':
+    case '`':
+      return '\x00'
+    case '[':
+      return '\x1b'
+    case '\\':
+      return '\x1c'
+    case ']':
+      return '\x1d'
+    case '^':
+      return '\x1e'
+    case '_':
+    case '/':
+      return '\x1f'
+    case '?':
+      return '\x7f'
+    default:
+      return data
+  }
+}
+
+function applyStickyModifier(data: string, sticky: StickyModifier): string {
+  if (!sticky) return data
+  if (sticky === 'ctrl') return toCtrlSequence(data)
+  return `\x1b${data}`
+}
+
+interface MobileExtraKeysProps {
+  onFocusTerminal: () => void
+  onSend: (data: string) => void
+  onToggleSticky: (modifier: ModifierKey) => void
+  stickyModifier: StickyModifier
+}
+
+function MobileExtraKeys({ onSend, stickyModifier, onToggleSticky, onFocusTerminal }: MobileExtraKeysProps) {
+  const toolbarGridStyle = { gridTemplateColumns: 'repeat(7, minmax(0, 1fr))' } as const
+
+  const handlePointerDown = useCallback((e: React.PointerEvent<HTMLButtonElement>) => {
+    e.preventDefault()
+  }, [])
+
+  const handleSend = useCallback(
+    (data: string) => {
+      onSend(data)
+      onFocusTerminal()
+    },
+    [onFocusTerminal, onSend],
+  )
+
+  const btnBase =
+    'flex h-8 min-w-0 w-full items-center justify-center overflow-hidden whitespace-nowrap rounded-md border px-0 text-[10px] leading-none font-mono font-semibold tracking-[-0.02em] text-text-200 transition-[background-color,color,border-color,transform] duration-100 select-none active:scale-[0.98]'
+  const btnNormal = `${btnBase} border-border-200/20 bg-bg-200/70 active:bg-bg-300/80`
+  const btnActive = `${btnBase} border-accent-main-100/45 bg-accent-main-100/18 text-accent-main-100`
+
+  return (
+    <div
+      className="w-full border-t border-border-200/40 bg-bg-100/95 supports-[backdrop-filter]:bg-bg-100/85 supports-[backdrop-filter]:backdrop-blur-sm"
+      style={{ WebkitTextSizeAdjust: '100%', textSizeAdjust: '100%' }}
+    >
+      <div className="px-1 py-1">
+        <div className="grid gap-0.5">
+          {MOBILE_EXTRA_KEY_ROWS.map((row, rowIndex) => (
+            <div key={rowIndex} className="grid w-full gap-0.5" style={toolbarGridStyle}>
+              {row.map(key => {
+                const isModifier = key.modifier !== undefined
+                const isActive = isModifier && stickyModifier === key.modifier
+
+                return (
+                  <button
+                    key={key.label}
+                    type="button"
+                    aria-pressed={isActive}
+                    className={isActive ? btnActive : btnNormal}
+                    onPointerDown={handlePointerDown}
+                    onClick={() => {
+                      if (key.modifier) {
+                        onToggleSticky(key.modifier)
+                        onFocusTerminal()
+                        return
+                      }
+                      if (key.data) {
+                        handleSend(key.data)
+                      }
+                    }}
+                  >
+                    <span className="block max-w-full overflow-hidden whitespace-nowrap text-center leading-none [text-wrap:nowrap]">
+                      {key.label}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// ============================================
 // Terminal Component
 // ============================================
 
@@ -129,13 +275,48 @@ interface TerminalProps {
 export const Terminal = memo(function Terminal({ ptyId, directory, isActive }: TerminalProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [isTouchScrolling, setIsTouchScrolling] = useState(false)
+  const [stickyModifier, setStickyModifier] = useState<StickyModifier>(null)
   const terminalRef = useRef<XTerm | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
+  const stickyModifierRef = useRef<StickyModifier>(null)
   const wsRef = useRef<WebSocket | null>(null)
   const resizeTimeoutRef = useRef<number | null>(null)
   const mountedRef = useRef(true)
   const isPanelResizingRef = useRef(false)
   const [hasBeenActive, setHasBeenActive] = useState(isActive)
+
+  const clearStickyModifier = useCallback(() => {
+    stickyModifierRef.current = null
+    setStickyModifier(null)
+  }, [])
+
+  const toggleStickyModifier = useCallback((modifier: ModifierKey) => {
+    setStickyModifier(prev => {
+      const next = prev === modifier ? null : modifier
+      stickyModifierRef.current = next
+      return next
+    })
+  }, [])
+
+  const focusTerminal = useCallback(() => {
+    terminalRef.current?.focus()
+  }, [])
+
+  const sendTerminalData = useCallback(
+    (data: string) => {
+      const sticky = stickyModifierRef.current
+      const outgoing = applyStickyModifier(data, sticky)
+
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(outgoing)
+      }
+
+      if (sticky) {
+        clearStickyModifier()
+      }
+    },
+    [clearStickyModifier],
+  )
 
   // 当 tab 第一次变为活动状态时，标记它
   useEffect(() => {
@@ -188,6 +369,18 @@ export const Terminal = memo(function Terminal({ ptyId, directory, isActive }: T
     terminal.loadAddon(webLinksAddon)
 
     terminal.open(containerRef.current)
+
+    const textarea = terminal.textarea
+    const handleTextareaBlur = () => clearStickyModifier()
+    if (isMobile && textarea) {
+      textarea.setAttribute('autocapitalize', 'none')
+      textarea.setAttribute('autocomplete', 'off')
+      textarea.setAttribute('autocorrect', 'off')
+      textarea.setAttribute('enterkeyhint', 'send')
+      textarea.setAttribute('inputmode', 'text')
+      textarea.setAttribute('spellcheck', 'false')
+      textarea.addEventListener('blur', handleTextareaBlur)
+    }
 
     requestAnimationFrame(() => {
       if (mountedRef.current) {
@@ -260,9 +453,7 @@ export const Terminal = memo(function Terminal({ ptyId, directory, isActive }: T
 
       disposeData?.dispose()
       disposeData = terminal.onData(data => {
-        if (ws && ws.readyState === WebSocket.OPEN) {
-          ws.send(data)
-        }
+        sendTerminalData(data)
       })
     }
 
@@ -292,6 +483,7 @@ export const Terminal = memo(function Terminal({ ptyId, directory, isActive }: T
       }
       disposeData?.dispose()
       disposeTitle?.dispose()
+      textarea?.removeEventListener('blur', handleTextareaBlur)
       // 置空 refs 防止内存泄漏
       wsRef.current = null
       // 显式 dispose addons
@@ -301,7 +493,7 @@ export const Terminal = memo(function Terminal({ ptyId, directory, isActive }: T
       terminalRef.current = null
       fitAddonRef.current = null
     }
-  }, [ptyId, directory, hasBeenActive])
+  }, [ptyId, directory, hasBeenActive, clearStickyModifier, sendTerminalData])
 
   useEffect(() => {
     const container = containerRef.current
@@ -477,6 +669,12 @@ export const Terminal = memo(function Terminal({ ptyId, directory, isActive }: T
     }
   }, [isActive])
 
+  useEffect(() => {
+    if (!isActive) {
+      clearStickyModifier()
+    }
+  }, [isActive, clearStickyModifier])
+
   // 监听面板 resize 结束事件
   useEffect(() => {
     if (!isActive) return
@@ -541,26 +739,41 @@ export const Terminal = memo(function Terminal({ ptyId, directory, isActive }: T
         }
       `}</style>
       <div
-        ref={containerRef}
-        className={`h-full w-full bg-bg-100 ${isMobile ? 'no-scrollbar' : ''} ${isMobile ? (isTouchScrolling ? 'scrollbar-active' : 'scrollbar-idle') : ''}`}
+        className={`${isMobile ? 'flex flex-col' : ''} h-full w-full`}
         style={{
-          padding: isMobile ? '0' : '4px 0 0 4px', // 极简 padding
-          touchAction: isMobile ? 'pan-y' : 'auto',
           visibility: isActive ? 'visible' : 'hidden',
           position: isActive ? 'relative' : 'absolute',
           pointerEvents: isActive ? 'auto' : 'none',
+          inset: isActive ? undefined : 0,
         }}
-        onClick={() => {
-          if (isMobile && terminalRef.current) {
-            terminalRef.current.focus()
-          }
-        }}
-        onTouchEnd={e => {
-          if (terminalRef.current && e.target === containerRef.current) {
-            terminalRef.current.focus()
-          }
-        }}
-      />
+      >
+        <div
+          ref={containerRef}
+          className={`${isMobile ? 'flex-1 min-h-0' : 'h-full'} w-full bg-bg-100 ${isMobile ? 'no-scrollbar' : ''} ${isMobile ? (isTouchScrolling ? 'scrollbar-active' : 'scrollbar-idle') : ''}`}
+          style={{
+            padding: isMobile ? '0' : '4px 0 0 4px',
+            touchAction: isMobile ? 'pan-y' : 'auto',
+          }}
+          onClick={() => {
+            if (isMobile && terminalRef.current) {
+              focusTerminal()
+            }
+          }}
+          onTouchEnd={e => {
+            if (terminalRef.current && e.target === containerRef.current) {
+              focusTerminal()
+            }
+          }}
+        />
+        {isMobile && (
+          <MobileExtraKeys
+            stickyModifier={stickyModifier}
+            onToggleSticky={toggleStickyModifier}
+            onSend={sendTerminalData}
+            onFocusTerminal={focusTerminal}
+          />
+        )}
+      </div>
     </>
   )
 })

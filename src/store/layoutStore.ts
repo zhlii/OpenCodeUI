@@ -13,6 +13,8 @@ export interface PanelTab {
   id: string
   type: PanelTabType
   position: PanelPosition
+  previewFile?: PreviewFile | null
+  previewFiles?: PreviewFile[]
   // Terminal 特有属性
   ptyId?: string
   title?: string
@@ -24,6 +26,8 @@ export interface PreviewFile {
   path: string
   name: string
 }
+
+const MAX_RIGHT_PANEL_WIDTH = 1280
 
 // 兼容旧的 TerminalTab 类型
 export interface TerminalTab {
@@ -51,9 +55,6 @@ interface LayoutState {
   rightPanelOpen: boolean
   rightPanelWidth: number
 
-  // 文件预览状态
-  previewFile: PreviewFile | null
-
   // 底部面板
   bottomPanelOpen: boolean
   bottomPanelHeight: number
@@ -68,7 +69,7 @@ class LayoutStore {
   private state: LayoutState = {
     panelTabs: [
       // 默认 tabs: files 和 changes 在右侧面板
-      { id: 'files', type: 'files', position: 'right' },
+      { id: 'files', type: 'files', position: 'right', previewFile: null, previewFiles: [] },
       { id: 'changes', type: 'changes', position: 'right' },
     ],
     activeTabId: {
@@ -79,7 +80,6 @@ class LayoutStore {
     sidebarFolderRecents: false,
     rightPanelOpen: false,
     rightPanelWidth: 450,
-    previewFile: null,
     bottomPanelOpen: false,
     bottomPanelHeight: 250,
   }
@@ -103,7 +103,7 @@ class LayoutStore {
       const savedWidth = localStorage.getItem('opencode-right-panel-width')
       if (savedWidth) {
         const width = parseInt(savedWidth)
-        if (!isNaN(width) && width >= 300 && width <= 800) {
+        if (!isNaN(width) && width >= 300 && width <= MAX_RIGHT_PANEL_WIDTH) {
           this.state.rightPanelWidth = width
         }
       }
@@ -237,12 +237,12 @@ class LayoutStore {
 
   // 添加 Files 标签
   addFilesTab(position: PanelPosition) {
-    return this.addSingletonTab('files', position)
+    return this.addTab({ type: 'files', position, previewFile: null, previewFiles: [] })
   }
 
   // 添加 Changes 标签
   addChangesTab(position: PanelPosition) {
-    return this.addSingletonTab('changes', position)
+    return this.addTab({ type: 'changes', position })
   }
 
   // 添加 MCP 标签
@@ -398,9 +398,9 @@ class LayoutStore {
   }
 
   setRightPanelWidth(width: number) {
-    this.state.rightPanelWidth = width
+    this.state.rightPanelWidth = Math.min(Math.max(width, 300), MAX_RIGHT_PANEL_WIDTH)
     try {
-      localStorage.setItem('opencode-right-panel-width', width.toString())
+      localStorage.setItem('opencode-right-panel-width', this.state.rightPanelWidth.toString())
     } catch {
       // ignore
     }
@@ -412,37 +412,103 @@ class LayoutStore {
   // ============================================
 
   openFilePreview(file: PreviewFile, position?: PanelPosition) {
-    this.state.previewFile = file
+    const targetTab = this.getTargetFilesTab(position)
+    if (!targetTab) return
 
-    // 辅助函数：激活指定位置的 files tab
-    const activateFilesTab = (pos: PanelPosition) => {
-      this.setPanelOpen(pos, true)
-      const filesTab = this.state.panelTabs.find(t => t.type === 'files' && t.position === pos)
-      if (filesTab) {
-        this.state.activeTabId[pos] = filesTab.id
-      }
-    }
+    const previewFiles = targetTab.previewFiles ?? []
+    const existingIndex = previewFiles.findIndex(item => item.path === file.path)
+    const nextPreviewFiles =
+      existingIndex === -1 ? [...previewFiles, file] : previewFiles.map(item => (item.path === file.path ? file : item))
 
-    if (position) {
-      // 指定了位置，直接使用
-      activateFilesTab(position)
-    } else {
-      // 没有指定位置，找到第一个 Files tab
-      const filesTab = this.state.panelTabs.find(t => t.type === 'files')
-      if (filesTab) {
-        activateFilesTab(filesTab.position)
-      } else {
-        // 没有 Files tab，默认打开右侧面板并创建一个
-        this.state.rightPanelOpen = true
-        this.setRightPanelView('files')
-      }
-    }
+    targetTab.previewFiles = nextPreviewFiles
+    targetTab.previewFile = file
+    this.state.activeTabId[targetTab.position] = targetTab.id
+    this.setPanelOpen(targetTab.position, true)
     this.notify()
   }
 
-  closeFilePreview() {
-    this.state.previewFile = null
+  activateFilePreview(tabId: string, path: string) {
+    const tab = this.state.panelTabs.find(item => item.id === tabId && item.type === 'files')
+    const file = tab?.previewFiles?.find(item => item.path === path)
+    if (!tab || !file) return
+    tab.previewFile = file
     this.notify()
+  }
+
+  closeFilePreview(tabId: string, path?: string) {
+    const tab = this.state.panelTabs.find(item => item.id === tabId && item.type === 'files')
+    const previewFiles = tab?.previewFiles
+    const targetPath = path ?? tab?.previewFile?.path
+    if (!tab || !previewFiles || !targetPath) return
+
+    const index = previewFiles.findIndex(item => item.path === targetPath)
+    if (index === -1) return
+
+    const isActive = tab.previewFile?.path === targetPath
+    const nextPreviewFiles = previewFiles.filter(item => item.path !== targetPath)
+
+    tab.previewFiles = nextPreviewFiles
+
+    if (nextPreviewFiles.length === 0) {
+      tab.previewFile = null
+    } else if (isActive) {
+      const nextIndex = Math.min(index, nextPreviewFiles.length - 1)
+      tab.previewFile = nextPreviewFiles[nextIndex] ?? null
+    }
+
+    this.notify()
+  }
+
+  closeAllFilePreviews(tabId: string) {
+    const tab = this.state.panelTabs.find(item => item.id === tabId && item.type === 'files')
+    if (!tab) return
+    tab.previewFile = null
+    tab.previewFiles = []
+    this.notify()
+  }
+
+  reorderFilePreviews(tabId: string, draggedPath: string, targetPath: string) {
+    const tab = this.state.panelTabs.find(item => item.id === tabId && item.type === 'files')
+    const previewFiles = tab?.previewFiles
+    if (!tab || !previewFiles) return
+
+    const draggedIndex = previewFiles.findIndex(item => item.path === draggedPath)
+    const targetIndex = previewFiles.findIndex(item => item.path === targetPath)
+
+    if (draggedIndex === -1 || targetIndex === -1 || draggedIndex === targetIndex) return
+
+    const nextPreviewFiles = [...previewFiles]
+    const [dragged] = nextPreviewFiles.splice(draggedIndex, 1)
+    nextPreviewFiles.splice(targetIndex, 0, dragged)
+    tab.previewFiles = nextPreviewFiles
+    this.notify()
+  }
+
+  private getTargetFilesTab(position?: PanelPosition): PanelTab | null {
+    if (position) {
+      const activeId = this.state.activeTabId[position]
+      const activeFilesTab = this.state.panelTabs.find(
+        t => t.id === activeId && t.type === 'files' && t.position === position,
+      )
+      if (activeFilesTab) return activeFilesTab
+
+      const filesTab = this.state.panelTabs.find(t => t.type === 'files' && t.position === position)
+      if (filesTab) return filesTab
+
+      const id = this.addFilesTab(position)
+      return this.state.panelTabs.find(t => t.id === id) ?? null
+    }
+
+    const preferred = (['right', 'bottom'] as const)
+      .map(pos =>
+        this.state.panelTabs.find(
+          t => t.id === this.state.activeTabId[pos] && t.type === 'files' && t.position === pos,
+        ),
+      )
+      .find(Boolean)
+    if (preferred) return preferred
+
+    return this.state.panelTabs.find(t => t.type === 'files') ?? null
   }
 
   // ============================================

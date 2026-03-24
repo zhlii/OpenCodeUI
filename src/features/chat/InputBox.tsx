@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect, useCallback, useMemo, memo } from 'react'
+import { useTranslation } from 'react-i18next'
 import { AttachmentPreview, type Attachment } from '../attachment'
 import {
   MentionMenu,
@@ -120,6 +121,7 @@ function InputBoxComponent({
   collapsedPermission,
   collapsedQuestion,
 }: InputBoxProps) {
+  const { t } = useTranslation('chat')
   // 合并文件能力：优先用 fileCapabilities，回退到 supportsImages
   const fileCaps: FileCapabilities = useMemo(
     () =>
@@ -371,13 +373,17 @@ function InputBoxComponent({
           agent: mentionedAgent || selectedAgent,
           variant: selectedVariant,
         }),
-      resetDraft,
+      () => {
+        resetDraft()
+        onClearRevert?.()
+      },
     )
   }, [
     attachments,
     canSend,
     isSubmitting,
     onCommand,
+    onClearRevert,
     onSend,
     resetDraft,
     runSubmit,
@@ -886,10 +892,18 @@ function InputBoxComponent({
           className={`relative flex flex-col gap-2 ${isCollapsed ? 'justify-end' : ''}`}
           style={isCollapsed && expandedHeight > 0 ? { minHeight: expandedHeight } : undefined}
         >
-          {/* FloatingActions — absolute 定位在内容区上方，不占文档流，
-              避免显隐变化影响 InputBox 高度导致滚动位置抖动 */}
-          <div className="absolute bottom-full left-0 right-0 flex justify-center pb-2 pointer-events-none">
-            <div className="pointer-events-auto">
+          {/* FloatingActions — 
+              展开态：absolute 定位在内容区上方，不占文档流，避免显隐变化影响高度导致滚动抖动
+              收起态：正常文档流，紧贴胶囊上方
+              始终同一 DOM 节点，切换时 FloatingActions 不 remount，避免入场动画闪烁 */}
+          <div
+            className={
+              isCollapsed
+                ? 'flex justify-center pb-2'
+                : 'absolute bottom-full left-0 right-0 flex justify-center pb-2 pointer-events-none'
+            }
+          >
+            <div className={isCollapsed ? undefined : 'pointer-events-auto'}>
               <FloatingActions
                 showScrollToBottom={showScrollToBottom}
                 isCollapsed={isCollapsed}
@@ -905,13 +919,15 @@ function InputBoxComponent({
           </div>
 
           {/* Collapsed Capsule - 移动端收起状态 */}
-          {isCollapsed ? (
+          {isCollapsed && (
             <CollapsedCapsule
               onExpand={handleExpandInput}
               showScrollToBottom={showScrollToBottom}
               onScrollToBottom={onScrollToBottom}
             />
-          ) : (
+          )}
+
+          {!isCollapsed && (
             <>
               {/* Input Container */}
               <div
@@ -933,7 +949,7 @@ function InputBoxComponent({
                 {/* Drop overlay */}
                 {isDragging && (
                   <div className="absolute inset-0 z-50 rounded-2xl bg-accent-main-100/5 backdrop-blur-[1px] flex items-center justify-center pointer-events-none">
-                    <span className="text-sm text-accent-main-100 font-medium">Drop files here</span>
+                    <span className="text-sm text-accent-main-100 font-medium">{t('inputBox.dropFilesHere')}</span>
                   </div>
                 )}
                 {/* @ Mention Menu */}
@@ -1009,9 +1025,7 @@ function InputBoxComponent({
                         onFocus={handleFocus}
                         onBlur={handleBlur}
                         disabled={inputDisabled}
-                        placeholder={
-                          isMobile ? 'Reply to Agent...' : 'Reply to Agent (type @ to mention, / for commands)'
-                        }
+                        placeholder={isMobile ? t('inputBox.replyToAgentMobile') : t('inputBox.replyToAgent')}
                         className="w-full resize-none focus:outline-none focus:ring-0 bg-transparent text-text-100 placeholder:text-text-400 custom-scrollbar"
                         style={{
                           ...TEXT_STYLE,
