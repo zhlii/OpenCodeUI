@@ -11,7 +11,7 @@ import {
 } from '../../../components/Icons'
 import { useDirectory, useSessionStats, useKeybindingLabel } from '../../../hooks'
 import { useSessionContext } from '../../../contexts/useSessionContext'
-import { useMessageStore, childSessionStore } from '../../../store'
+import { useMessageStore, childSessionStore, useLayoutStore } from '../../../store'
 import { useBusySessions, useBusyCount } from '../../../store/activeSessionStore'
 import { notificationStore, useNotifications, useUnreadNotificationCount } from '../../../store/notificationStore'
 import type { NotificationEntry } from '../../../store/notificationStore'
@@ -57,6 +57,8 @@ export function SidePanel({
   const { currentDirectory, addDirectory } = useDirectory()
   const [connectionState, setConnectionState] = useState<ConnectionInfo | null>(null)
   const [sidebarTab, setSidebarTab] = useState<'recents' | 'active'>('recents')
+
+  const { sidebarShowChildSessions } = useLayoutStore()
 
   const showLabels = isExpanded || isMobile
   const newChatShortcut = useKeybindingLabel('newSession')
