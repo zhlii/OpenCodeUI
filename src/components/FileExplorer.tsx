@@ -4,13 +4,14 @@
 // 性能优化：使用 CSS 变量 + requestAnimationFrame 处理 resize
 // ============================================
 
-import { memo, useCallback, useMemo, useEffect, useRef, useState, type DragEvent } from 'react'
+import { memo, useCallback, useMemo, useEffect, useRef, useState, type DragEvent, type ReactNode } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useFileExplorer, type FileTreeNode } from '../hooks'
 import { useVerticalSplitResize } from '../hooks/useVerticalSplitResize'
 import { layoutStore, type PreviewFile } from '../store/layoutStore'
-import { ChevronRightIcon, ChevronDownIcon, RetryIcon, AlertCircleIcon, DownloadIcon } from './Icons'
+import { ChevronRightIcon, ChevronDownIcon, RetryIcon, AlertCircleIcon, DownloadIcon, MaximizeIcon } from './Icons'
 import { CodePreview } from './CodePreview'
+import { FullscreenViewer } from './FullscreenViewer'
 import { PreviewTabsBar, type PreviewTabsBarItem } from './PreviewTabsBar'
 import { getMaterialIconUrl } from '../utils/materialIcons'
 import { detectLanguage } from '../utils/languageUtils'
@@ -398,6 +399,7 @@ function FilePreview({
 }: FilePreviewProps) {
   const { t } = useTranslation(['components', 'common'])
   const scrollRef = useRef<HTMLDivElement>(null)
+  const [fullscreenOpen, setFullscreenOpen] = useState(false)
 
   // 获取文件名
   const fileName = path?.split(/[/\\]/).pop() || 'Untitled'
@@ -478,6 +480,38 @@ function FilePreview({
     }
   }, [content])
 
+  // 全屏内容
+  const fullscreenContent = useMemo((): ReactNode => {
+    if (!displayContent) return null
+    switch (displayContent.type) {
+      case 'media':
+        return (
+          <MediaPreview
+            category={displayContent.category}
+            dataUrl={displayContent.dataUrl}
+            mimeType={displayContent.mimeType}
+            fileName={fileName}
+          />
+        )
+      case 'binary':
+        return <BinaryPlaceholder mimeType={displayContent.mimeType} fileName={fileName} onDownload={handleDownload} />
+      case 'textMedia':
+        return (
+          <TextMediaPreview
+            dataUrl={displayContent.dataUrl}
+            text={displayContent.text}
+            language={language || 'xml'}
+            fileName={fileName}
+            isResizing={false}
+          />
+        )
+      case 'text':
+        return <CodePreview code={displayContent.text} language={language || 'text'} />
+      default:
+        return null
+    }
+  }, [displayContent, fileName, language, handleDownload])
+
   return (
     <div className="flex flex-col h-full relative">
       <PreviewTabsBar
@@ -491,13 +525,22 @@ function FilePreview({
         tabWidthClassName="w-40 max-w-40"
         rightActions={
           content ? (
-            <button
-              onClick={handleDownload}
-              className="p-1 text-text-400 hover:text-text-100 hover:bg-bg-300/50 rounded transition-colors"
-              title={`${t('common:save')} ${fileName}`}
-            >
-              <DownloadIcon size={12} />
-            </button>
+            <>
+              <button
+                onClick={() => setFullscreenOpen(true)}
+                className="p-1 text-text-400 hover:text-text-100 hover:bg-bg-300/50 rounded transition-colors"
+                title={t('contentBlock.fullscreen')}
+              >
+                <MaximizeIcon size={12} />
+              </button>
+              <button
+                onClick={handleDownload}
+                className="p-1 text-text-400 hover:text-text-100 hover:bg-bg-300/50 rounded transition-colors"
+                title={`${t('common:save')} ${fileName}`}
+              >
+                <DownloadIcon size={12} />
+              </button>
+            </>
           ) : null
         }
       />
@@ -537,6 +580,25 @@ function FilePreview({
           <div className="flex items-center justify-center h-full text-text-400 text-xs">{t('common:noContent')}</div>
         )}
       </div>
+
+      <FullscreenViewer
+        isOpen={fullscreenOpen}
+        onClose={() => setFullscreenOpen(false)}
+        title={fileName}
+        headerRight={
+          content ? (
+            <button
+              onClick={handleDownload}
+              className="p-1.5 text-text-400 hover:text-text-100 hover:bg-bg-200/60 rounded-lg transition-colors"
+              title={`${t('common:save')} ${fileName}`}
+            >
+              <DownloadIcon size={14} />
+            </button>
+          ) : null
+        }
+      >
+        {fullscreenContent}
+      </FullscreenViewer>
     </div>
   )
 }

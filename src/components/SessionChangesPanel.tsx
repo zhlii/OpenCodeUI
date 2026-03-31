@@ -6,9 +6,10 @@
 
 import { memo, useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
-import { RetryIcon, ChevronRightIcon } from './Icons'
+import { RetryIcon, ChevronRightIcon, MaximizeIcon } from './Icons'
 import { getMaterialIconUrl } from '../utils/materialIcons'
 import { DiffViewer, type ViewMode } from './DiffViewer'
+import { FullscreenViewer, ViewModeSwitch } from './FullscreenViewer'
 import { getSessionDiff } from '../api/session'
 import type { FileDiff } from '../api/types'
 import { detectLanguage } from '../utils/languageUtils'
@@ -439,6 +440,9 @@ const DiffPreviewPanel = memo(function DiffPreviewPanel({
 }: DiffPreviewPanelProps) {
   const language = detectLanguage(diff.file) || 'text'
   const { t } = useTranslation(['components', 'common'])
+  const [fullscreenOpen, setFullscreenOpen] = useState(false)
+  const [fullscreenViewMode, setFullscreenViewMode] = useState<ViewMode>(viewMode)
+  const fileName = diff.file.split(/[/\\]/).pop() || diff.file
   const previewTabItems = useMemo<PreviewTabsBarItem[]>(
     () =>
       previewDiffs.map(previewDiff => {
@@ -476,6 +480,18 @@ const DiffPreviewPanel = memo(function DiffPreviewPanel({
         onCloseAll={onClose}
         onReorder={onReorderPreview}
         tabWidthClassName="w-44 max-w-44"
+        rightActions={
+          <button
+            onClick={() => {
+              setFullscreenViewMode(viewMode)
+              setFullscreenOpen(true)
+            }}
+            className="p-1 text-text-400 hover:text-text-100 hover:bg-bg-300/50 rounded transition-colors"
+            title={t('contentBlock.fullscreen')}
+          >
+            <MaximizeIcon size={12} />
+          </button>
+        }
       />
 
       {/* Diff Content - DiffViewer 自带滚动 */}
@@ -488,6 +504,21 @@ const DiffPreviewPanel = memo(function DiffPreviewPanel({
           isResizing={isResizing}
         />
       </div>
+
+      <FullscreenViewer
+        isOpen={fullscreenOpen}
+        onClose={() => setFullscreenOpen(false)}
+        title={fileName}
+        titleExtra={
+          <div className="flex items-center gap-1.5 text-[11px] font-mono tabular-nums shrink-0">
+            {diff.additions > 0 && <span className="text-success-100">+{diff.additions}</span>}
+            {diff.deletions > 0 && <span className="text-danger-100">-{diff.deletions}</span>}
+          </div>
+        }
+        headerRight={<ViewModeSwitch viewMode={fullscreenViewMode} onChange={setFullscreenViewMode} />}
+      >
+        <DiffViewer before={diff.before} after={diff.after} language={language} viewMode={fullscreenViewMode} />
+      </FullscreenViewer>
     </div>
   )
 })
