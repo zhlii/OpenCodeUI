@@ -3,9 +3,10 @@ import { useTranslation } from 'react-i18next'
 import { SearchIcon, PencilIcon, TrashIcon, ComposeIcon } from '../../components/Icons'
 import { formatRelativeTime } from '../../utils/dateUtils'
 import { ConfirmDialog } from '../../components/ui/ConfirmDialog'
-import { useIsMobile } from '../../hooks'
+import { useInputCapabilities } from '../../hooks/useInputCapabilities'
 import { useSessionActiveEntry } from '../../store/activeSessionStore'
 import { notificationStore, useHasUnreadCompletedNotification } from '../../store/notificationStore'
+import { SessionChildrenSlot } from '../chat/sidebar/SessionChildrenSlot'
 import type { ApiSession } from '../../api'
 
 interface SessionListProps {
@@ -25,8 +26,12 @@ interface SessionListProps {
   grouped?: boolean
   density?: 'default' | 'compact' | 'minimal'
   showStats?: boolean
-  /** Global 模式下显示每个 session 的目录名 */
   showDirectory?: boolean
+  /** 拉 /children 全量展示的父 session ID */
+  expandedChildSessionIds?: Set<string>
+  /** 按父 ID 分组的直接挂出来的子 session */
+  inlineChildSessions?: Map<string, ApiSession[]>
+  onSelectChildSession?: (session: ApiSession) => void
 }
 
 // 时间分组类型
@@ -50,8 +55,12 @@ export function SessionList({
   density = 'default',
   showStats = true,
   showDirectory = false,
+  expandedChildSessionIds,
+  inlineChildSessions,
+  onSelectChildSession,
 }: SessionListProps) {
   const { t } = useTranslation(['commands', 'common', 'chat'])
+  const { preferTouchUi } = useInputCapabilities()
   const listRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
 
@@ -169,38 +178,66 @@ export function SessionList({
                 </h3>
                 <div className="space-y-0.5">
                   {groupSessions.map(session => (
-                    <SessionListItem
-                      key={session.id}
-                      session={session}
-                      isSelected={session.id === selectedId}
-                      onSelect={() => onSelect(session)}
-                      onDelete={() => setDeleteConfirm({ isOpen: true, sessionId: session.id })}
-                      onRename={newTitle => onRename(session.id, newTitle)}
-                      density={density}
-                      showStats={showStats}
-                      showDirectory={showDirectory}
-                    />
+                    <div key={session.id}>
+                      <SessionListItem
+                        session={session}
+                        isSelected={session.id === selectedId}
+                        onSelect={() => onSelect(session)}
+                        onDelete={() => setDeleteConfirm({ isOpen: true, sessionId: session.id })}
+                        onRename={newTitle => onRename(session.id, newTitle)}
+                        preferTouchUi={preferTouchUi}
+                        density={density}
+                        showStats={showStats}
+                        showDirectory={showDirectory}
+                      />
+                      {onSelectChildSession &&
+                        (expandedChildSessionIds?.has(session.id) || inlineChildSessions?.has(session.id)) && (
+                          <SessionChildrenSlot
+                            parentSession={session}
+                            selectedSessionId={selectedId}
+                            fetchAll={expandedChildSessionIds?.has(session.id)}
+                            children={inlineChildSessions?.get(session.id)}
+                            onSelect={onSelectChildSession}
+                          />
+                        )}
+                    </div>
                   ))}
                 </div>
               </div>
             )
           })
         ) : (
-          // Flat View (Search)
+          // Flat View
           <div className="space-y-0.5 mt-1">
-            {sessions.map(session => (
-              <SessionListItem
-                key={session.id}
-                session={session}
-                isSelected={session.id === selectedId}
-                onSelect={() => onSelect(session)}
-                onDelete={() => setDeleteConfirm({ isOpen: true, sessionId: session.id })}
-                onRename={newTitle => onRename(session.id, newTitle)}
-                density={density}
-                showStats={showStats}
-                showDirectory={showDirectory}
-              />
-            ))}
+            {sessions.map(session => {
+              const inlineChildren = inlineChildSessions?.get(session.id)
+              const shouldFetchAll = expandedChildSessionIds?.has(session.id)
+              const hasChildren = shouldFetchAll || (inlineChildren && inlineChildren.length > 0)
+              return (
+                <div key={session.id}>
+                  <SessionListItem
+                    session={session}
+                    isSelected={session.id === selectedId}
+                    onSelect={() => onSelect(session)}
+                    onDelete={() => setDeleteConfirm({ isOpen: true, sessionId: session.id })}
+                    onRename={newTitle => onRename(session.id, newTitle)}
+                    preferTouchUi={preferTouchUi}
+                    density={density}
+                    showStats={showStats}
+                    showDirectory={showDirectory}
+                  />
+                  {hasChildren && onSelectChildSession && (
+                    <SessionChildrenSlot
+                      parentSession={session}
+                      selectedSessionId={selectedId}
+                      fetchAll={shouldFetchAll}
+                      children={inlineChildren}
+                      onSelect={onSelectChildSession}
+                    />
+                  )}
+                </div>
+              )
+            })}
           </div>
         )}
 
@@ -239,6 +276,7 @@ export interface SessionListItemProps {
   onSelect: () => void
   onDelete: () => void
   onRename: (newTitle: string) => void
+  preferTouchUi: boolean
   density?: 'default' | 'compact' | 'minimal'
   showStats?: boolean
   showDirectory?: boolean
@@ -250,6 +288,7 @@ export function SessionListItem({
   onSelect,
   onDelete,
   onRename,
+  preferTouchUi,
   density = 'default',
   showStats = true,
   showDirectory = false,
@@ -275,9 +314,13 @@ export function SessionListItem({
     : null
   const hasUnreadCompletedNotification = useHasUnreadCompletedNotification(session.id)
   const itemRef = useRef<HTMLDivElement>(null)
-  const isMobile = useIsMobile()
   const isCompact = density === 'compact'
   const isMinimal = density === 'minimal'
+  const hasSummaryStats = Boolean(
+    showStats &&
+    session.summary &&
+    (session.summary.additions > 0 || session.summary.deletions > 0 || session.summary.files > 0),
+  )
 
   const handleDelete = (e: React.MouseEvent) => {
     e.stopPropagation()
@@ -315,21 +358,23 @@ export function SessionListItem({
 
   // 长按触摸手势：显示操作按钮
   const handleTouchStart = useCallback(() => {
+    if (!preferTouchUi) return
     touchMoved.current = false
     longPressTimer.current = setTimeout(() => {
       if (!touchMoved.current) {
         setShowActions(true)
       }
     }, 500)
-  }, [])
+  }, [preferTouchUi])
 
   const handleTouchMove = useCallback(() => {
+    if (!preferTouchUi) return
     touchMoved.current = true
     if (longPressTimer.current) {
       clearTimeout(longPressTimer.current)
       longPressTimer.current = null
     }
-  }, [])
+  }, [preferTouchUi])
 
   const handleTouchEnd = useCallback(() => {
     if (longPressTimer.current) {
@@ -397,9 +442,9 @@ export function SessionListItem({
     )
   }
 
-  // 移动端操作按钮是否可见：长按触发的 showActions 状态
-  // 桌面端：hover 触发
-  const actionsVisible = isMobile ? showActions : false
+  // 触控优先设备：长按触发动作按钮
+  // 鼠标/悬停设备：沿用 hover 触发
+  const actionsVisible = preferTouchUi ? showActions : false
 
   // ============================================
   // Minimal 模式 —— 文件夹视图下的紧凑单行
@@ -436,7 +481,7 @@ export function SessionListItem({
 
         <div
           className={`flex min-w-0 flex-1 items-center gap-1.5 transition-[padding] duration-200 ${
-            showActions ? 'pr-[60px]' : 'pr-0 group-hover:pr-[60px]'
+            showActions ? 'pr-12' : 'pr-0 group-hover:pr-12'
           }`}
         >
           {/* 标题 */}
@@ -444,15 +489,25 @@ export function SessionListItem({
             {session.title || t('sessions.untitledChat')}
           </span>
 
-          {/* 时间 — 操作按钮出现时隐藏，并为按钮预留空间 */}
-          {session.time?.updated && (
-            <span
-              className={`shrink-0 text-[10px] text-text-500 transition-opacity duration-150 ${
-                actionsVisible ? 'opacity-0' : 'opacity-100 group-hover:opacity-0'
-              }`}
+          {((hasSummaryStats && session.summary) || session.time?.updated) && (
+            <div
+              className={`${actionsVisible ? 'hidden' : 'flex group-hover:hidden'} shrink-0 items-center gap-1.5 text-[10px] text-text-500`}
             >
-              {formatRelativeTime(session.time.updated)}
-            </span>
+              {hasSummaryStats && session.summary && (
+                <span className="flex shrink-0 items-center gap-1 font-mono">
+                  {session.summary.additions > 0 && (
+                    <span className="text-success-100">+{session.summary.additions}</span>
+                  )}
+                  {session.summary.deletions > 0 && (
+                    <span className="text-danger-100">-{session.summary.deletions}</span>
+                  )}
+                  {session.summary.files > 0 && <span>{session.summary.files}f</span>}
+                </span>
+              )}
+
+              {/* 时间 — 操作按钮出现时隐藏，并为按钮预留空间 */}
+              {session.time?.updated && <span className="shrink-0">{formatRelativeTime(session.time.updated)}</span>}
+            </div>
           )}
         </div>
 

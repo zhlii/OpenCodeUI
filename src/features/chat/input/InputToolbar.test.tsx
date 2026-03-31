@@ -12,6 +12,21 @@ vi.mock('../../../hooks', () => ({
   useIsMobile: () => useIsMobileMock(),
 }))
 
+vi.mock('../chatViewport', () => ({
+  useChatViewport: () => ({
+    presentation: { surfaceVariant: 'desktop', isCompact: false },
+    interaction: {
+      mode: 'pointer',
+      touchCapable: false,
+      sidebarBehavior: 'docked',
+      rightPanelBehavior: 'docked',
+      bottomPanelBehavior: 'docked',
+      outlineInteraction: 'pointer',
+      enableCollapsedInputDock: false,
+    },
+  }),
+}))
+
 vi.mock('../../../utils/tauri', () => ({
   isTauri: () => isTauriMock(),
   isTauriMobile: () => isTauriMobileMock(),
@@ -47,7 +62,7 @@ vi.mock('../../../components/ui', () => ({
 }))
 
 vi.mock('../ModelSelector', () => ({
-  InputToolbarModelSelector: () => null,
+  ModelSelector: () => null,
 }))
 
 describe('InputToolbar file selection', () => {

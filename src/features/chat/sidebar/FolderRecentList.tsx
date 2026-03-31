@@ -5,12 +5,15 @@ import { FolderIcon, FolderOpenIcon, SpinnerIcon } from '../../../components/Ico
 import { ExpandableSection } from '../../../components/ui'
 import { ConfirmDialog } from '../../../components/ui/ConfirmDialog'
 import { useDelayedRender, useSessions } from '../../../hooks'
+import { useInputCapabilities } from '../../../hooks/useInputCapabilities'
 import { useIsMobile } from '../../../hooks/useIsMobile'
 import { useInView } from '../../../hooks/useInView'
 import { getDirectoryName, isSameDirectory } from '../../../utils'
+import { useLayoutStore } from '../../../store'
 import { useBusySessions } from '../../../store/activeSessionStore'
 import { useNotifications } from '../../../store/notificationStore'
 import { SessionListItem } from '../../sessions'
+import { SessionChildrenSlot } from './SessionChildrenSlot'
 
 const DIRECTORY_PAGE_SIZE = 5
 
@@ -31,6 +34,9 @@ interface FolderRecentListProps {
   onRenameSession: (session: ApiSession, newTitle: string) => Promise<void>
   onDeleteSession: (session: ApiSession) => Promise<void>
   onReorderProject: (draggedPath: string, targetPath: string) => void
+  expandedChildSessionIds?: Set<string>
+  inlineChildSessions?: Map<string, ApiSession[]>
+  onSelectChildSession?: (session: ApiSession) => void
 }
 
 interface PendingDeleteSession {
@@ -68,9 +74,14 @@ export function FolderRecentList({
   onRenameSession,
   onDeleteSession,
   onReorderProject,
+  expandedChildSessionIds,
+  inlineChildSessions,
+  onSelectChildSession,
 }: FolderRecentListProps) {
   const { t } = useTranslation(['chat', 'common'])
   const isMobile = useIsMobile()
+  const { preferTouchUi } = useInputCapabilities()
+  const { sidebarFolderRecentsShowDiff } = useLayoutStore()
   const [pendingDelete, setPendingDelete] = useState<PendingDeleteSession | null>(null)
   const allBusySessions = useBusySessions()
   const allNotifications = useNotifications()
@@ -367,11 +378,16 @@ export function FolderRecentList({
                 project={project}
                 isExpanded={!isDragging && expandedProjectIds.includes(project.id)}
                 folderStatus={folderStatusByProjectId.get(project.id) ?? null}
+                preferTouchUi={preferTouchUi}
+                showSessionDiffStats={sidebarFolderRecentsShowDiff}
                 selectedSessionId={selectedSessionId}
                 onToggle={() => handleToggleProject(project.id)}
                 onSelectSession={onSelectSession}
                 onRenameSession={onRenameSession}
                 onRequestDeleteSession={setPendingDelete}
+                expandedChildSessionIds={expandedChildSessionIds}
+                inlineChildSessions={inlineChildSessions}
+                onSelectChildSession={onSelectChildSession}
                 // 桌面拖拽
                 draggable={!!project.canReorder && !isMobile}
                 isDragged={activeDragId === project.id}
@@ -421,11 +437,16 @@ interface FolderRecentSectionProps {
   project: FolderRecentProject
   isExpanded: boolean
   folderStatus: FolderStatus | null
+  preferTouchUi: boolean
+  showSessionDiffStats: boolean
   selectedSessionId: string | null
   onToggle: () => void
   onSelectSession: (session: ApiSession) => void
   onRenameSession: (session: ApiSession, newTitle: string) => Promise<void>
   onRequestDeleteSession: (pending: PendingDeleteSession) => void
+  expandedChildSessionIds?: Set<string>
+  inlineChildSessions?: Map<string, ApiSession[]>
+  onSelectChildSession?: (session: ApiSession) => void
   // 桌面拖拽
   draggable: boolean
   isDragged: boolean
@@ -445,11 +466,16 @@ function FolderRecentSection({
   project,
   isExpanded,
   folderStatus,
+  preferTouchUi,
+  showSessionDiffStats,
   selectedSessionId,
   onToggle,
   onSelectSession,
   onRenameSession,
   onRequestDeleteSession,
+  expandedChildSessionIds,
+  inlineChildSessions,
+  onSelectChildSession,
   draggable,
   isDragged,
   dropPosition,
@@ -576,17 +602,29 @@ function FolderRecentSection({
               ) : (
                 <>
                   {sessions.map(session => (
-                    <SessionListItem
-                      key={session.id}
-                      session={session}
-                      isSelected={session.id === selectedSessionId}
-                      onSelect={() => onSelectSession(session)}
-                      onRename={newTitle => handleRename(session.id, newTitle)}
-                      onDelete={() => handleDelete(session.id)}
-                      density="minimal"
-                      showStats={false}
-                      showDirectory={false}
-                    />
+                    <div key={session.id}>
+                      <SessionListItem
+                        session={session}
+                        isSelected={session.id === selectedSessionId}
+                        onSelect={() => onSelectSession(session)}
+                        onRename={newTitle => handleRename(session.id, newTitle)}
+                        onDelete={() => handleDelete(session.id)}
+                        preferTouchUi={preferTouchUi}
+                        density="minimal"
+                        showStats={showSessionDiffStats}
+                        showDirectory={false}
+                      />
+                      {onSelectChildSession &&
+                        (expandedChildSessionIds?.has(session.id) || inlineChildSessions?.has(session.id)) && (
+                          <SessionChildrenSlot
+                            parentSession={session}
+                            selectedSessionId={selectedSessionId}
+                            fetchAll={expandedChildSessionIds?.has(session.id)}
+                            children={inlineChildSessions?.get(session.id)}
+                            onSelect={onSelectChildSession}
+                          />
+                        )}
+                    </div>
                   ))}
 
                   {hasMore && (

@@ -11,6 +11,7 @@ import {
 } from '../mention'
 import { SlashCommandMenu, type SlashCommandMenuHandle } from '../slash-command'
 import { InputToolbar } from './input/InputToolbar'
+import type { ModelSelectorHandle } from './ModelSelector'
 import { InputFooter } from './input/InputFooter'
 import { FloatingActions, CollapsedCapsule } from './input/InputActions'
 import { useMobileCollapse } from './input/useMobileCollapse'
@@ -18,7 +19,7 @@ import { useAttachmentRail } from './input/useAttachmentRail'
 import { useInputHistory } from './input/useInputHistory'
 import { TEXT_STYLE, detectSlashTrigger, isFileSupported, ensureFileMime, readFileAsDataUrl } from './input/inputUtils'
 import { keybindingStore, matchesKeybinding } from '../../store/keybindingStore'
-import { useIsMobile } from '../../hooks'
+import { useChatViewport } from './chatViewport'
 import type { ApiAgent } from '../../api/client'
 import type { ModelInfo, FileCapabilities } from '../../api'
 import type { Command } from '../../api/command'
@@ -62,6 +63,7 @@ export interface InputBoxProps {
   selectedModelKey?: string | null
   onModelChange?: (modelKey: string, model: ModelInfo) => void
   modelsLoading?: boolean
+  modelSelectorRef?: React.RefObject<ModelSelectorHandle | null>
   rootPath?: string
   sessionId?: string | null
   // Undo/Redo
@@ -105,6 +107,7 @@ function InputBoxComponent({
   selectedModelKey = null,
   onModelChange,
   modelsLoading = false,
+  modelSelectorRef,
   rootPath = '',
   sessionId,
   revertedText,
@@ -157,8 +160,8 @@ function InputBoxComponent({
   const [isDragging, setIsDragging] = useState(false)
   const dragCounterRef = useRef(0)
 
-  // 响应式 placeholder
-  const isMobile = useIsMobile()
+  const { presentation, interaction } = useChatViewport()
+  const isCompact = presentation.isCompact
 
   // Refs
   const textareaRef = useRef<HTMLTextAreaElement>(null)
@@ -191,6 +194,7 @@ function InputBoxComponent({
   const hasContent = text.trim().length > 0 || attachments.length > 0
   const { isCollapsed, expandedHeight, handleExpandInput, handleFocus, handleBlur, handleContainerPointerDown } =
     useMobileCollapse({
+      enabled: interaction.enableCollapsedInputDock,
       hasContent,
       isAtBottom,
       textareaRef,
@@ -252,9 +256,9 @@ function InputBoxComponent({
     // 原生层已处理键盘 resize，window.innerHeight 即可用高度
     const viewportH = window.innerHeight
     // 可用高度 = viewport - header(48px) - toolbar/padding/footer(~100px) - 安全余量
-    const maxH = isMobile ? Math.max(80, viewportH - 48 - 100 - 72) : viewportH * 0.35
+    const maxH = isCompact ? Math.max(80, viewportH - 48 - 100 - 72) : viewportH * 0.35
     textarea.style.height = Math.max(24, Math.min(scrollHeight, maxH)) + 'px'
-  }, [text, isMobile])
+  }, [text, isCompact])
 
   // 计算
   const inputDisabled = !!disabled || isSubmitting
@@ -883,7 +887,7 @@ function InputBoxComponent({
   return (
     <div className="w-full">
       <div
-        className="mx-auto max-w-3xl px-4 pointer-events-auto transition-[max-width] duration-300 ease-in-out"
+        className={`mx-auto max-w-3xl pointer-events-auto transition-[max-width] duration-300 ease-in-out ${isCompact ? 'px-2' : 'px-4'}`}
         style={{ paddingBottom: bottomDockPadding }}
       >
         <div
@@ -897,6 +901,7 @@ function InputBoxComponent({
               收起态：正常文档流，紧贴胶囊上方
               始终同一 DOM 节点，切换时 FloatingActions 不 remount，避免入场动画闪烁 */}
           <div
+            data-floating-actions
             className={
               isCollapsed
                 ? 'flex justify-center pb-2'
@@ -929,29 +934,8 @@ function InputBoxComponent({
 
           {!isCollapsed && (
             <>
-              {/* Input Container */}
-              <div
-                ref={inputContainerRef}
-                data-input-box
-                onPointerDown={handleContainerPointerDown}
-                onDragEnter={handleDragEnter}
-                onDragOver={handleDragOver}
-                onDragLeave={handleDragLeave}
-                onDrop={handleDrop}
-                className={`bg-bg-000 rounded-2xl relative z-30 transition-all focus-within:outline-none shadow-lg shadow-black/5 ${
-                  isDragging
-                    ? 'border border-accent-main-100 ring-2 ring-accent-main-100/30'
-                    : isStreaming
-                      ? 'border border-accent-main-100/50 animate-border-pulse'
-                      : 'border border-border-200/50'
-                }`}
-              >
-                {/* Drop overlay */}
-                {isDragging && (
-                  <div className="absolute inset-0 z-50 rounded-2xl bg-accent-main-100/5 backdrop-blur-[1px] flex items-center justify-center pointer-events-none">
-                    <span className="text-sm text-accent-main-100 font-medium">{t('inputBox.dropFilesHere')}</span>
-                  </div>
-                )}
+              {/* Wrapper — 菜单在 glass 容器外，避免嵌套 backdrop-filter 导致模糊失效 */}
+              <div className="relative z-30">
                 {/* @ Mention Menu */}
                 <MentionMenu
                   ref={mentionMenuRef}
@@ -975,88 +959,114 @@ function InputBoxComponent({
                   onClose={handleSlashClose}
                 />
 
-                <div className="relative">
-                  <div className="overflow-hidden">
-                    {/* Attachments Preview - 显示在输入框上方 */}
-                    <div
-                      className={`grid transition-[grid-template-rows,opacity] duration-300 ease-out ${
-                        attachments.length > 0 ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
-                      }`}
-                    >
-                      <div className="overflow-hidden">
-                        <div className="px-4 pt-3 pb-1">
-                          <div className="relative">
-                            <div
-                              ref={attachmentRailRef}
-                              onScroll={syncAttachmentRailState}
-                              onWheel={handleAttachmentRailWheel}
-                              className="overflow-x-auto overflow-y-hidden overscroll-x-contain no-scrollbar touch-pan-x"
-                              style={{ WebkitOverflowScrolling: 'touch' }}
-                            >
-                              <AttachmentPreview
-                                attachments={attachments}
-                                onRemove={handleRemoveAttachment}
-                                variant="rail"
-                                className={isSubmitting ? 'pr-4 pointer-events-none opacity-70' : 'pr-4'}
-                              />
+                {/* Input Container */}
+                <div
+                  ref={inputContainerRef}
+                  data-input-box
+                  onPointerDown={handleContainerPointerDown}
+                  onDragEnter={handleDragEnter}
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDrop={handleDrop}
+                  className={`glass rounded-2xl relative transition-all focus-within:outline-none shadow-lg ${
+                    isDragging
+                      ? 'border border-accent-main-100 ring-2 ring-accent-main-100/30'
+                      : isStreaming
+                        ? 'border border-accent-main-100/50 animate-border-pulse'
+                        : 'border border-border-200/60'
+                  }`}
+                >
+                  {/* Drop overlay */}
+                  {isDragging && (
+                    <div className="absolute inset-0 z-50 rounded-2xl bg-accent-main-100/5 backdrop-blur-[1px] flex items-center justify-center pointer-events-none">
+                      <span className="text-sm text-accent-main-100 font-medium">{t('inputBox.dropFilesHere')}</span>
+                    </div>
+                  )}
+
+                  <div className="relative">
+                    <div className="overflow-hidden">
+                      {/* Attachments Preview - 显示在输入框上方 */}
+                      <div
+                        className={`grid transition-[grid-template-rows,opacity] duration-300 ease-out ${
+                          attachments.length > 0 ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0'
+                        }`}
+                      >
+                        <div className="overflow-hidden">
+                          <div className="px-4 pt-3 pb-1">
+                            <div className="relative">
+                              <div
+                                ref={attachmentRailRef}
+                                onScroll={syncAttachmentRailState}
+                                onWheel={handleAttachmentRailWheel}
+                                className="overflow-x-auto overflow-y-hidden overscroll-x-contain no-scrollbar touch-pan-x"
+                                style={{ WebkitOverflowScrolling: 'touch' }}
+                              >
+                                <AttachmentPreview
+                                  attachments={attachments}
+                                  onRemove={handleRemoveAttachment}
+                                  variant="rail"
+                                  className={isSubmitting ? 'pr-4 pointer-events-none opacity-70' : 'pr-4'}
+                                />
+                              </div>
+
+                              {attachmentsOverflowing && showAttachmentLeftFade && (
+                                <div className="pointer-events-none absolute inset-y-0 left-0 w-8 bg-gradient-to-r from-bg-000/50 to-transparent" />
+                              )}
+
+                              {attachmentsOverflowing && showAttachmentRightFade && (
+                                <div className="pointer-events-none absolute inset-y-0 right-0 w-10 bg-gradient-to-l from-bg-000/50 to-transparent" />
+                              )}
                             </div>
-
-                            {attachmentsOverflowing && showAttachmentLeftFade && (
-                              <div className="pointer-events-none absolute inset-y-0 left-0 w-8 bg-gradient-to-r from-bg-000 via-bg-000/95 to-transparent" />
-                            )}
-
-                            {attachmentsOverflowing && showAttachmentRightFade && (
-                              <div className="pointer-events-none absolute inset-y-0 right-0 w-10 bg-gradient-to-l from-bg-000 via-bg-000/95 to-transparent" />
-                            )}
                           </div>
                         </div>
                       </div>
-                    </div>
 
-                    {/* Text Input - 简单的 textarea，直接显示文本 */}
-                    <div className="px-4 pt-4 pb-2">
-                      <textarea
-                        ref={textareaRef}
-                        value={text}
-                        onChange={handleChange}
-                        onKeyDown={handleKeyDown}
-                        onPaste={handlePaste}
-                        onScroll={handleScroll}
-                        onFocus={handleFocus}
-                        onBlur={handleBlur}
-                        disabled={inputDisabled}
-                        placeholder={isMobile ? t('inputBox.replyToAgentMobile') : t('inputBox.replyToAgent')}
-                        className="w-full resize-none focus:outline-none focus:ring-0 bg-transparent text-text-100 placeholder:text-text-400 custom-scrollbar"
-                        style={{
-                          ...TEXT_STYLE,
-                          minHeight: '24px',
-                          maxHeight: isMobile ? 'calc(var(--app-height, 100vh) - 220px)' : '35vh',
-                        }}
-                        rows={1}
+                      {/* Text Input - 简单的 textarea，直接显示文本 */}
+                      <div className="pt-4 pb-2">
+                        <textarea
+                          ref={textareaRef}
+                          value={text}
+                          onChange={handleChange}
+                          onKeyDown={handleKeyDown}
+                          onPaste={handlePaste}
+                          onScroll={handleScroll}
+                          onFocus={handleFocus}
+                          onBlur={handleBlur}
+                          disabled={inputDisabled}
+                          placeholder={isCompact ? t('inputBox.replyToAgentMobile') : t('inputBox.replyToAgent')}
+                          className={`w-full resize-none focus:outline-none focus:ring-0 bg-transparent text-text-100 placeholder:text-text-400 custom-scrollbar ${isCompact ? 'px-3' : 'px-4'}`}
+                          style={{
+                            ...TEXT_STYLE,
+                            minHeight: '24px',
+                            maxHeight: isCompact ? 'calc(var(--app-height, 100vh) - 220px)' : '35vh',
+                          }}
+                          rows={1}
+                        />
+                      </div>
+
+                      {/* Bottom Bar -> InputToolbar */}
+                      <InputToolbar
+                        agents={agents}
+                        selectedAgent={selectedAgent}
+                        onAgentChange={onAgentChange}
+                        variants={variants}
+                        selectedVariant={selectedVariant}
+                        onVariantChange={onVariantChange}
+                        fileCapabilities={fileCaps}
+                        onFilesSelected={handleFilesSelected}
+                        isStreaming={isStreaming}
+                        isSending={isSubmitting}
+                        onAbort={onAbort}
+                        canSend={canSend || false}
+                        onSend={handleSend}
+                        models={models}
+                        selectedModelKey={selectedModelKey}
+                        onModelChange={onModelChange}
+                        modelsLoading={modelsLoading}
+                        inputContainerRef={inputContainerRef}
+                        modelSelectorRef={modelSelectorRef}
                       />
                     </div>
-
-                    {/* Bottom Bar -> InputToolbar */}
-                    <InputToolbar
-                      agents={agents}
-                      selectedAgent={selectedAgent}
-                      onAgentChange={onAgentChange}
-                      variants={variants}
-                      selectedVariant={selectedVariant}
-                      onVariantChange={onVariantChange}
-                      fileCapabilities={fileCaps}
-                      onFilesSelected={handleFilesSelected}
-                      isStreaming={isStreaming}
-                      isSending={isSubmitting}
-                      onAbort={onAbort}
-                      canSend={canSend || false}
-                      onSend={handleSend}
-                      models={models}
-                      selectedModelKey={selectedModelKey}
-                      onModelChange={onModelChange}
-                      modelsLoading={modelsLoading}
-                      inputContainerRef={inputContainerRef}
-                    />
                   </div>
                 </div>
               </div>

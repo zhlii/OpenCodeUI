@@ -1,14 +1,14 @@
 import { memo, useState, useCallback, useRef, useLayoutEffect, useEffect } from 'react'
-import { useIsMobile } from '../../hooks'
+import { useInputCapabilities } from '../../hooks/useInputCapabilities'
 
-// 统一的动画配置 (与 Sidebar 保持一致)
 const ANIMATION_EASE = 'ease-[cubic-bezier(0.25,1,0.5,1)]'
 const ANIMATION_DURATION = 'duration-300'
 
 interface ResizablePanelProps {
   position: 'right' | 'bottom'
   isOpen: boolean
-  size: number // width for right, height for bottom
+  overlay?: boolean
+  size: number
   minSize?: number
   maxSize?: number
   onSizeChange: (size: number) => void
@@ -20,6 +20,7 @@ interface ResizablePanelProps {
 export const ResizablePanel = memo(function ResizablePanel({
   position,
   isOpen,
+  overlay = false,
   size,
   minSize = 300,
   maxSize = 800,
@@ -28,7 +29,8 @@ export const ResizablePanel = memo(function ResizablePanel({
   children,
   className = '',
 }: ResizablePanelProps) {
-  const isMobile = useIsMobile()
+  const { preferTouchUi, hasCoarsePointer, hasTouch } = useInputCapabilities()
+  const touchCapable = preferTouchUi || hasCoarsePointer || hasTouch
   const [isResizing, setIsResizing] = useState(false)
   const safeBottomInset = 'var(--safe-area-inset-bottom, 0px)'
   const panelRef = useRef<HTMLDivElement>(null)
@@ -36,11 +38,13 @@ export const ResizablePanel = memo(function ResizablePanel({
   const rafRef = useRef<number>(0)
   const currentSizeRef = useRef(size)
   const isResizingRef = useRef(isResizing)
+  const viewportHeight = typeof window === 'undefined' ? 800 : window.innerHeight
   const effectiveMaxSize =
-    position === 'right' ? Math.min(maxSize, Math.max(minSize, window.innerWidth - 320)) : maxSize
-  // 保存事件处理函数引用，以便在组件卸载时清理
-  const mouseHandlersRef = useRef<{
-    move: ((e: MouseEvent) => void) | null
+    position === 'bottom' ? Math.min(maxSize, Math.floor(viewportHeight * (touchCapable ? 0.62 : 0.56))) : maxSize
+  const effectiveSize = Math.min(Math.max(size, minSize), effectiveMaxSize)
+
+  const pointerHandlersRef = useRef<{
+    move: ((e: PointerEvent) => void) | null
     up: (() => void) | null
   }>({ move: null, up: null })
   const touchHandlersRef = useRef<{
@@ -48,26 +52,26 @@ export const ResizablePanel = memo(function ResizablePanel({
     end: (() => void) | null
   }>({ move: null, end: null })
 
-  // 同步 size 到 ref 和 CSS 变量
   useEffect(() => {
     isResizingRef.current = isResizing
   }, [isResizing])
 
   useLayoutEffect(() => {
-    if (isMobile || !panelRef.current) return
-
-    // 不要在 resize 过程中响应 size prop 变化（虽然通常 resize 时 prop 不会变）
-    // 也不要响应 isResizing 的变化（防止 resize 结束时用旧 prop 覆盖新 DOM）
+    if (overlay || !panelRef.current) return
     if (isResizingRef.current) return
 
-    const cssVar = position === 'right' ? '--panel-width' : '--panel-height'
-    panelRef.current.style.setProperty(cssVar, `${size}px`)
-    currentSizeRef.current = size
-  }, [size, isMobile, position])
+    if (position === 'right') {
+      panelRef.current.style.width = isOpen ? `${effectiveSize}px` : '0px'
+    } else {
+      panelRef.current.style.height = isOpen ? `${effectiveSize}px` : '0px'
+    }
+    currentSizeRef.current = effectiveSize
+  }, [effectiveSize, overlay, isOpen, position])
 
-  // Desktop Resize 逻辑
   const startResizing = useCallback(
-    (e: React.MouseEvent) => {
+    (e: React.PointerEvent) => {
+      if (!e.isPrimary) return
+      if (e.pointerType === 'mouse' && e.button !== 0) return
       e.preventDefault()
 
       const panel = panelRef.current
@@ -75,8 +79,7 @@ export const ResizablePanel = memo(function ResizablePanel({
       if (!panel || !content) return
 
       setIsResizing(true)
-      const cursor = position === 'right' ? 'col-resize' : 'row-resize'
-      document.body.style.cursor = cursor
+      document.body.style.cursor = position === 'right' ? 'col-resize' : 'row-resize'
       document.body.style.userSelect = 'none'
 
       window.dispatchEvent(new CustomEvent('panel-resize-start'))
@@ -85,27 +88,23 @@ export const ResizablePanel = memo(function ResizablePanel({
       const startY = e.clientY
       const startSize = currentSizeRef.current
 
-      const handleMouseMove = (moveEvent: MouseEvent) => {
+      const handlePointerMove = (moveEvent: PointerEvent) => {
         if (rafRef.current) cancelAnimationFrame(rafRef.current)
 
         rafRef.current = requestAnimationFrame(() => {
-          let delta = 0
-          if (position === 'right') {
-            // 右侧面板，往左拖动是增加宽度
-            delta = startX - moveEvent.clientX
-          } else {
-            // 底部面板，往上拖动是增加高度
-            delta = startY - moveEvent.clientY
-          }
+          const delta = position === 'right' ? startX - moveEvent.clientX : startY - moveEvent.clientY
+          const nextSize = Math.min(Math.max(startSize + delta, minSize), effectiveMaxSize)
 
-          const newSize = Math.min(Math.max(startSize + delta, minSize), effectiveMaxSize)
-          const cssVar = position === 'right' ? '--panel-width' : '--panel-height'
-          panel.style.setProperty(cssVar, `${newSize}px`)
-          currentSizeRef.current = newSize
+          if (position === 'right') {
+            panel.style.width = `${nextSize}px`
+          } else {
+            panel.style.height = `${nextSize}px`
+          }
+          currentSizeRef.current = nextSize
         })
       }
 
-      const handleMouseUp = () => {
+      const handlePointerUp = () => {
         if (rafRef.current) cancelAnimationFrame(rafRef.current)
 
         if (content) {
@@ -115,24 +114,23 @@ export const ResizablePanel = memo(function ResizablePanel({
         setIsResizing(false)
         document.body.style.cursor = ''
         document.body.style.userSelect = ''
-        document.removeEventListener('mousemove', handleMouseMove)
-        document.removeEventListener('mouseup', handleMouseUp)
-        // 清空 ref
-        mouseHandlersRef.current = { move: null, up: null }
+        document.removeEventListener('pointermove', handlePointerMove)
+        document.removeEventListener('pointerup', handlePointerUp)
+        document.removeEventListener('pointercancel', handlePointerUp)
+        pointerHandlersRef.current = { move: null, up: null }
 
         onSizeChange(currentSizeRef.current)
       }
 
-      // 保存到 ref 以便清理
-      mouseHandlersRef.current = { move: handleMouseMove, up: handleMouseUp }
+      pointerHandlersRef.current = { move: handlePointerMove, up: handlePointerUp }
 
-      document.addEventListener('mousemove', handleMouseMove)
-      document.addEventListener('mouseup', handleMouseUp)
+      document.addEventListener('pointermove', handlePointerMove)
+      document.addEventListener('pointerup', handlePointerUp)
+      document.addEventListener('pointercancel', handlePointerUp)
     },
     [position, minSize, effectiveMaxSize, onSizeChange],
   )
 
-  // Mobile Touch Resize (仅 BottomPanel)
   const handleTouchResizeStart = useCallback(
     (e: React.TouchEvent) => {
       if (position !== 'bottom') return
@@ -144,13 +142,11 @@ export const ResizablePanel = memo(function ResizablePanel({
       const startHeight = panel.getBoundingClientRect().height
 
       const handleTouchMove = (moveEvent: TouchEvent) => {
-        // moveEvent.preventDefault() // 视情况开启
         const touchY = moveEvent.touches[0].clientY
         const deltaY = startY - touchY
-        const newHeight = Math.min(Math.max(startHeight + deltaY, 200), window.innerHeight * 0.9)
-
-        panel.style.height = `${newHeight}px`
-        currentSizeRef.current = newHeight
+        const nextHeight = Math.min(Math.max(startHeight + deltaY, minSize), Math.max(minSize, effectiveMaxSize))
+        panel.style.height = `${nextHeight}px`
+        currentSizeRef.current = nextHeight
       }
 
       const handleTouchEnd = () => {
@@ -158,55 +154,41 @@ export const ResizablePanel = memo(function ResizablePanel({
         window.dispatchEvent(new CustomEvent('panel-resize-end'))
         document.removeEventListener('touchmove', handleTouchMove)
         document.removeEventListener('touchend', handleTouchEnd)
-        // 清空 ref
         touchHandlersRef.current = { move: null, end: null }
         onSizeChange(currentSizeRef.current)
       }
 
-      // 保存到 ref 以便清理
       touchHandlersRef.current = { move: handleTouchMove, end: handleTouchEnd }
 
       document.addEventListener('touchmove', handleTouchMove, { passive: false })
       document.addEventListener('touchend', handleTouchEnd)
     },
-    [position, onSizeChange],
+    [position, minSize, effectiveMaxSize, onSizeChange],
   )
 
-  // 组件卸载时清理可能残留的事件监听器
   useEffect(() => {
     return () => {
-      // 清理 mouse handlers
-      const { move: mouseMove, up: mouseUp } = mouseHandlersRef.current
-      if (mouseMove) document.removeEventListener('mousemove', mouseMove)
-      if (mouseUp) document.removeEventListener('mouseup', mouseUp)
+      const { move: pointerMove, up: pointerUp } = pointerHandlersRef.current
+      if (pointerMove) document.removeEventListener('pointermove', pointerMove)
+      if (pointerUp) {
+        document.removeEventListener('pointerup', pointerUp)
+        document.removeEventListener('pointercancel', pointerUp)
+      }
 
-      // 清理 touch handlers
       const { move: touchMove, end: touchEnd } = touchHandlersRef.current
       if (touchMove) document.removeEventListener('touchmove', touchMove)
       if (touchEnd) document.removeEventListener('touchend', touchEnd)
 
-      // 清理 raf
       if (rafRef.current) cancelAnimationFrame(rafRef.current)
 
-      // 恢复 body 样式
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
     }
   }, [])
 
-  // ============================================
-  // Styles
-  // ============================================
+  const containerClass = `flex flex-col bg-bg-100 overflow-hidden min-w-0 ${className}`
 
-  // 通用容器样式
-  const containerClass = `
-    flex flex-col bg-bg-100 overflow-hidden
-    ${className}
-  `
-
-  // Mobile Styles
-  if (isMobile) {
-    // Transform 状态
+  if (overlay) {
     const transformClass =
       position === 'right'
         ? isOpen
@@ -219,7 +201,7 @@ export const ResizablePanel = memo(function ResizablePanel({
     const mobileBaseClass =
       position === 'right'
         ? 'fixed left-0 right-0 z-[100] w-full bg-bg-100'
-        : 'fixed bottom-0 left-0 right-0 z-[100] h-[40vh] shadow-2xl rounded-t-xl border-t border-border-200 bg-bg-100'
+        : 'fixed bottom-0 left-0 right-0 z-[100] h-[40vh] shadow-lg rounded-t-xl border-t border-border-200 bg-bg-100'
 
     const mobileInsetStyle =
       position === 'right'
@@ -233,10 +215,9 @@ export const ResizablePanel = memo(function ResizablePanel({
 
     return (
       <>
-        {/* Mobile Backdrop */}
         <div
           className={`
-            fixed left-0 right-0 bg-[hsl(var(--always-black)/0.5)] z-[99] 
+            fixed left-0 right-0 bg-[hsl(var(--always-black)/0.5)] z-[99]
             transition-opacity ${ANIMATION_DURATION} ease-out
             ${isOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}
           `}
@@ -253,7 +234,6 @@ export const ResizablePanel = memo(function ResizablePanel({
           `}
           style={mobileInsetStyle}
         >
-          {/* Mobile Handle (Bottom only) */}
           {position === 'bottom' && (
             <div
               className="w-full flex items-center justify-center pt-2 pb-1 cursor-ns-resize touch-none bg-bg-100 shrink-0"
@@ -263,7 +243,7 @@ export const ResizablePanel = memo(function ResizablePanel({
             </div>
           )}
 
-          <div ref={contentRef} className="flex-1 flex flex-col min-h-0 w-full h-full relative bg-bg-100">
+          <div ref={contentRef} className="flex-1 flex flex-col min-h-0 min-w-0 w-full h-full relative bg-bg-100">
             {children}
           </div>
         </div>
@@ -271,31 +251,14 @@ export const ResizablePanel = memo(function ResizablePanel({
     )
   }
 
-  // Desktop Styles
-  const cssVar = position === 'right' ? '--panel-width' : '--panel-height'
-  const sizeStyle = { [cssVar]: `${size}px` } as React.CSSProperties
-
-  // Transition
-  // Right: width change
-  // Bottom: height change
   const transitionProp = position === 'right' ? 'transition-[width]' : 'transition-[height]'
   const transitionClass = isResizing ? 'transition-none' : `${transitionProp} ${ANIMATION_DURATION} ${ANIMATION_EASE}`
-
-  // Layout
-  // Right: relative h-full
-  // Bottom: relative w-full
   const desktopLayoutClass =
     position === 'right'
-      ? `relative h-full ${isOpen ? 'border-l border-border-200/50' : ''}`
-      : `relative w-full ${isOpen ? 'border-t border-border-200/50' : ''}` // Bottom panel needs top border when open
-
-  // Size control
-  // Right: width: var(--panel-width) or 0
-  // Bottom: height: var(--panel-height) or 0
-  const activeSizeStyle = {
-    ...sizeStyle,
-    [position === 'right' ? 'width' : 'height']: isOpen ? `var(${cssVar})` : 0,
-  }
+      ? `relative h-full min-w-0 ${isOpen ? 'border-l border-border-200/50' : ''}`
+      : `relative w-full ${isOpen ? 'border-t border-border-200/50' : ''}`
+  const activeSizeStyle =
+    position === 'right' ? { width: isOpen ? `${effectiveSize}px` : 0 } : { height: isOpen ? `${effectiveSize}px` : 0 }
 
   return (
     <div
@@ -303,38 +266,35 @@ export const ResizablePanel = memo(function ResizablePanel({
       style={activeSizeStyle}
       className={`${containerClass} ${desktopLayoutClass} ${transitionClass}`}
     >
-      {/* Desktop Resize Handle */}
       {position === 'right' ? (
         <div
-          className={`
-            absolute top-0 left-0 bottom-0 w-1 cursor-col-resize z-50
-            hover:bg-accent-main-100/50 transition-colors
-            ${isResizing ? 'bg-accent-main-100' : 'bg-transparent'}
-          `}
-          onMouseDown={startResizing}
-        />
+          className={`absolute top-0 left-0 bottom-0 ${touchCapable ? 'w-4 touch-none' : 'w-1'} cursor-col-resize z-50 bg-transparent`}
+          onPointerDown={startResizing}
+        >
+          <div
+            aria-hidden="true"
+            className={`absolute top-0 bottom-0 left-0 transition-colors ${touchCapable ? 'w-1 rounded-full' : 'w-full'} ${
+              isResizing ? 'bg-accent-main-100' : 'bg-transparent hover:bg-accent-main-100/50'
+            }`}
+          />
+        </div>
       ) : (
         <div
-          className={`
-            absolute top-0 left-0 right-0 h-1 cursor-row-resize z-50
-            hover:bg-accent-main-100/50 transition-colors -translate-y-1/2
-            ${isResizing ? 'bg-accent-main-100' : 'bg-transparent'}
-          `}
-          onMouseDown={startResizing}
-        />
+          className={`absolute top-0 left-0 right-0 ${touchCapable ? 'h-4 touch-none' : 'h-1'} cursor-row-resize z-50 bg-transparent`}
+          onPointerDown={startResizing}
+        >
+          <div
+            aria-hidden="true"
+            className={`absolute top-0 left-0 right-0 transition-colors ${touchCapable ? 'h-1 rounded-full' : 'h-full'} ${
+              isResizing ? 'bg-accent-main-100' : 'bg-transparent hover:bg-accent-main-100/50'
+            }`}
+          />
+        </div>
       )}
 
-      {/* Resize Overlay */}
       {isResizing && <div className="absolute inset-0 z-40 bg-transparent pointer-events-auto" />}
 
-      {/* Content */}
-      <div
-        ref={contentRef}
-        className={`
-          absolute inset-0 flex flex-col min-h-0
-          ${position === 'right' ? 'w-[var(--panel-width)]' : 'h-[var(--panel-height)]'}
-        `}
-      >
+      <div ref={contentRef} className="absolute inset-0 flex flex-col min-h-0 min-w-0 w-full h-full">
         {children}
       </div>
     </div>

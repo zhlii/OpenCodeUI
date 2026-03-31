@@ -87,6 +87,7 @@ export type ToolCardStyle = 'classic' | 'compact'
 const DEFAULT_TOOL_CARD_STYLE: ToolCardStyle = 'classic'
 const DEFAULT_IMMERSIVE_MODE = false
 const DEFAULT_COMPACT_INLINE_PERMISSION = false
+const DEFAULT_GLASS_EFFECT = true
 
 export interface ThemeState {
   /** 当前选中的主题风格 ID */
@@ -117,6 +118,8 @@ export interface ThemeState {
   immersiveMode: boolean
   /** 内嵌权限精简模式：ToolBody 有内容时只显示操作按钮 */
   compactInlinePermission: boolean
+  /** 毛玻璃效果开关（backdrop-filter blur） */
+  glassEffect: boolean
 }
 
 // ============================================
@@ -137,6 +140,7 @@ const STORAGE_KEY_CODE_WORD_WRAP = 'code-word-wrap'
 const STORAGE_KEY_TOOL_CARD_STYLE = 'tool-card-style'
 const STORAGE_KEY_IMMERSIVE_MODE = 'immersive-mode'
 const STORAGE_KEY_COMPACT_INLINE_PERMISSION = 'compact-inline-permission'
+const STORAGE_KEY_GLASS_EFFECT = 'glass-effect'
 
 // ============================================
 // DOM Style Element IDs
@@ -203,6 +207,9 @@ class ThemeStore {
         ? DEFAULT_COMPACT_INLINE_PERMISSION
         : savedCompactInlinePermission === 'true'
 
+    const savedGlassEffect = localStorage.getItem(STORAGE_KEY_GLASS_EFFECT)
+    const glassEffect = savedGlassEffect === null ? DEFAULT_GLASS_EFFECT : savedGlassEffect === 'true'
+
     this.state = {
       presetId: savedPreset,
       colorMode: savedMode,
@@ -218,6 +225,7 @@ class ThemeStore {
       toolCardStyle,
       immersiveMode,
       compactInlinePermission,
+      glassEffect,
     }
   }
 
@@ -268,6 +276,9 @@ class ThemeStore {
   }
   get compactInlinePermission() {
     return this.state.compactInlinePermission
+  }
+  get glassEffect() {
+    return this.state.glassEffect
   }
 
   /** 获取当前主题预设（内置主题返回对象，自定义返回 undefined） */
@@ -420,11 +431,20 @@ class ThemeStore {
     this.emit()
   }
 
+  setGlassEffect(enabled: boolean) {
+    if (this.state.glassEffect === enabled) return
+    this.state = { ...this.state, glassEffect: enabled }
+    localStorage.setItem(STORAGE_KEY_GLASS_EFFECT, String(enabled))
+    this.applyGlassClass()
+    this.emit()
+  }
+
   // ---- Theme Application ----
 
   /** 初始化：应用当前主题到 DOM */
   init() {
     this.applyTheme()
+    this.applyGlassClass()
 
     // 监听系统主题变化
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)')
@@ -515,6 +535,16 @@ class ThemeStore {
       document.head.appendChild(el)
     }
     el.textContent = css
+  }
+
+  /** 毛玻璃开关：data-glass 属性驱动 CSS */
+  private applyGlassClass() {
+    const root = document.documentElement
+    if (this.state.glassEffect) {
+      root.setAttribute('data-glass', '')
+    } else {
+      root.removeAttribute('data-glass')
+    }
   }
 
   // ---- Subscription (useSyncExternalStore compatible) ----

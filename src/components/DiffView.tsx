@@ -1,12 +1,12 @@
-import { memo, useState, useMemo } from 'react'
+import { memo, useState, useMemo, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { diffLines } from 'diff'
 import { ChevronDownIcon, MaximizeIcon } from './Icons'
 import { clsx } from 'clsx'
 import { detectLanguage } from '../utils/languageUtils'
 import { extractContentFromUnifiedDiff } from '../utils/diffUtils'
-import { FullscreenViewer } from './FullscreenViewer'
-import { DiffViewer } from './DiffViewer'
+import { FullscreenViewer, ViewModeSwitch } from './FullscreenViewer'
+import { DiffViewer, type ViewMode } from './DiffViewer'
 
 interface DiffViewProps {
   /** Unified diff format string */
@@ -50,6 +50,16 @@ export const DiffView = memo(function DiffView({
   const { t } = useTranslation(['components', 'common'])
   const [collapsed, setCollapsed] = useState(defaultCollapsed)
   const [modalOpen, setModalOpen] = useState(false)
+  const [fullscreenViewMode, setFullscreenViewMode] = useState<ViewMode>('split')
+
+  // 响应式 diff view mode（全屏弹窗用）
+  useEffect(() => {
+    if (!modalOpen) return
+    const checkWidth = () => setFullscreenViewMode(window.innerWidth >= 1000 ? 'split' : 'unified')
+    checkWidth()
+    window.addEventListener('resize', checkWidth)
+    return () => window.removeEventListener('resize', checkWidth)
+  }, [modalOpen])
 
   // Determine content to diff
   const content = useMemo(() => {
@@ -76,7 +86,7 @@ export const DiffView = memo(function DiffView({
   // Fallback for unified diff string only
   if (!hasContent && diff) {
     return (
-      <div className="border border-border-200/50 rounded-lg bg-bg-100 overflow-auto p-2 text-xs font-mono whitespace-pre text-text-200">
+      <div className="border border-border-200/50 rounded-md bg-bg-100 overflow-auto p-2 text-xs font-mono whitespace-pre text-text-200">
         {diff}
       </div>
     )
@@ -87,10 +97,10 @@ export const DiffView = memo(function DiffView({
   const fileName = filePath ? filePath.split(/[/\\]/).pop() : undefined
 
   return (
-    <div className="border border-border-200/50 rounded-lg overflow-hidden bg-bg-100 font-mono text-xs">
+    <div className="border border-border-200/50 rounded-md overflow-hidden bg-bg-100 font-mono text-xs">
       {/* Header */}
       <div
-        className="flex items-center gap-3 px-3 py-2 bg-bg-200/50 cursor-pointer hover:bg-bg-200 transition-colors select-none"
+        className="flex items-center gap-3 px-3 h-8 bg-bg-200/50 cursor-pointer hover:bg-bg-200 transition-colors select-none"
         onClick={() => setCollapsed(!collapsed)}
       >
         <div className="flex items-center gap-2 min-w-0 flex-1">
@@ -138,17 +148,22 @@ export const DiffView = memo(function DiffView({
         </div>
       </div>
 
-      {/* Diff Modal */}
+      {/* Fullscreen Diff */}
       {content && (
         <FullscreenViewer
-          mode="diff"
           isOpen={modalOpen}
           onClose={() => setModalOpen(false)}
-          diff={content}
-          filePath={filePath}
-          language={language}
-          diffStats={stats}
-        />
+          title={fileName}
+          titleExtra={
+            <div className="flex items-center gap-1.5 text-[11px] font-mono tabular-nums shrink-0">
+              {stats.additions > 0 && <span className="text-success-100">+{stats.additions}</span>}
+              {stats.deletions > 0 && <span className="text-danger-100">-{stats.deletions}</span>}
+            </div>
+          }
+          headerRight={<ViewModeSwitch viewMode={fullscreenViewMode} onChange={setFullscreenViewMode} />}
+        >
+          <DiffViewer before={content.before} after={content.after} language={language} viewMode={fullscreenViewMode} />
+        </FullscreenViewer>
       )}
     </div>
   )

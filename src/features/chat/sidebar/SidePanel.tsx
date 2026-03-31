@@ -11,7 +11,7 @@ import {
 } from '../../../components/Icons'
 import { useDirectory, useSessionStats, useKeybindingLabel } from '../../../hooks'
 import { useSessionContext } from '../../../contexts/useSessionContext'
-import { useMessageStore } from '../../../store'
+import { useMessageStore, childSessionStore } from '../../../store'
 import { useBusySessions, useBusyCount } from '../../../store/activeSessionStore'
 import { notificationStore, useNotifications, useUnreadNotificationCount } from '../../../store/notificationStore'
 import type { NotificationEntry } from '../../../store/notificationStore'
@@ -99,12 +99,15 @@ export function SidePanel({
     return map
   }, [sessions, fetchedSessions])
 
-  // 异步拉取 sessions 列表中不存在的 active/notification session
+  // 异步拉取不在 lookup 中的 active/notification/selected session
   useEffect(() => {
     const allNeeded = [
       ...busySessions.map(e => ({ sessionId: e.sessionId, directory: e.directory })),
       ...notifications.map(e => ({ sessionId: e.sessionId, directory: e.directory })),
     ]
+    if (selectedSessionId && !sessionLookup.has(selectedSessionId)) {
+      allNeeded.push({ sessionId: selectedSessionId, directory: currentDirectory || '' })
+    }
     const missing = allNeeded.filter(entry => !sessionLookup.has(entry.sessionId))
     if (missing.length === 0) return
 
@@ -115,11 +118,9 @@ export function SidePanel({
         missing.map(async entry => {
           try {
             const session = await getSession(entry.sessionId, entry.directory)
-            if (!cancelled) {
-              results[session.id] = session
-            }
+            if (!cancelled) results[session.id] = session
           } catch {
-            // 拉取失败就算了，标题会显示 fallback
+            /* ignore */
           }
         }),
       )
@@ -131,7 +132,67 @@ export function SidePanel({
     return () => {
       cancelled = true
     }
-  }, [busySessions, notifications, sessionLookup])
+  }, [busySessions, notifications, sessionLookup, selectedSessionId, currentDirectory])
+
+  // ---- 子 session 展示数据 ----
+  const rootSessionIds = useMemo(() => new Set(sessions.map(s => s.id)), [sessions])
+
+  const findParentId = useCallback(
+    (id: string) => {
+      const s = sessionLookup.get(id)
+      if (s?.parentID) return s.parentID
+      return childSessionStore.getSessionInfo(id)?.parentID
+    },
+    [sessionLookup],
+  )
+
+  // 开关开 → 拉 /children 全量：选中的 root 或选中子 session 时保持其父展开
+  const expandedChildSessionIds = useMemo(() => {
+    if (search || !sidebarShowChildSessions || !selectedSessionId) return undefined
+    if (rootSessionIds.has(selectedSessionId)) return new Set([selectedSessionId])
+    const pid = findParentId(selectedSessionId)
+    if (pid && rootSessionIds.has(pid)) return new Set([pid])
+    return undefined
+  }, [search, sidebarShowChildSessions, selectedSessionId, rootSessionIds, findParentId])
+
+  // 开关关 → 只挂活跃的 + 选中的子 session
+  const inlineChildSessions = useMemo(() => {
+    if (search) return undefined
+    const map = new Map<string, ApiSession[]>()
+    const add = (parentId: string, session: ApiSession) => {
+      if (expandedChildSessionIds?.has(parentId)) return
+      let arr = map.get(parentId)
+      if (!arr) {
+        arr = []
+        map.set(parentId, arr)
+      }
+      if (!arr.some(s => s.id === session.id)) arr.push(session)
+    }
+    for (const entry of busySessions) {
+      const pid = findParentId(entry.sessionId)
+      if (pid && rootSessionIds.has(pid)) {
+        const s = sessionLookup.get(entry.sessionId)
+        if (s) add(pid, s)
+      }
+    }
+    if (!sidebarShowChildSessions && selectedSessionId && !rootSessionIds.has(selectedSessionId)) {
+      const pid = findParentId(selectedSessionId)
+      if (pid && rootSessionIds.has(pid)) {
+        const s = sessionLookup.get(selectedSessionId)
+        if (s) add(pid, s)
+      }
+    }
+    return map.size > 0 ? map : undefined
+  }, [
+    search,
+    busySessions,
+    selectedSessionId,
+    sidebarShowChildSessions,
+    rootSessionIds,
+    expandedChildSessionIds,
+    sessionLookup,
+    findParentId,
+  ])
 
   const handleSelect = useCallback(
     (session: ApiSession) => {

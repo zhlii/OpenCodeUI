@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { fireEvent, render, screen } from '@testing-library/react'
 import { describe, expect, it, vi } from 'vitest'
 import { DiffView } from './DiffView'
@@ -10,8 +11,9 @@ vi.mock('../hooks/useSyntaxHighlight', () => ({
 }))
 
 vi.mock('./FullscreenViewer', () => ({
-  FullscreenViewer: ({ isOpen }: { isOpen: boolean }) =>
-    isOpen ? <div data-testid="fullscreen-viewer">viewer</div> : null,
+  FullscreenViewer: ({ isOpen, children }: { isOpen: boolean; children?: ReactNode }) =>
+    isOpen ? <div data-testid="fullscreen-viewer">{children}</div> : null,
+  ViewModeSwitch: () => <div data-testid="view-mode-switch">switch</div>,
 }))
 
 describe('DiffView', () => {

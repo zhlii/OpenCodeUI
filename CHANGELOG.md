@@ -1,5 +1,71 @@
 # Changelog
 
+## [v0.3.7] - 2026-03-28
+
+- fix: remove double border on attachment meta when no content preview (d29a2f4)
+- fix: hide floating actions (undo/redo/permission) during todo panel swap (a3a7231)
+- fix: apply glass effect to mobile collapsed capsule (2075818)
+- fix: fallback fetch after send to prevent missing user message on SSE drop (e2138df)
+- fix: skip overlay scrollbar on elements with no-scrollbar class (506cf24)
+- feat: child sessions displayed under parent in sidebar with toggle for always-show (97ce7d8)
+- feat: add diff toggle for folder recents (a1ed95e)
+- fix: wire compact model selector to global shortcut (d14fb42)
+
+## [v0.3.6] - 2026-03-28
+
+- test: add chatViewport mock to InputBox and InputToolbar tests (7eb80ac)
+- fix: remove unused let binding in overlayScrollbar (ab9eaba)
+- feat: add horizontal overlay scrollbar support (ad8d21d)
+- refactor: rewrite outline index with visual config, focus-based interaction and entry windowing (18bccf9)
+- fix: align compact model selector trigger (480dd04)
+- refactor: centralize chat viewport state (8512fcb)
+- fix: improve coarse pointer support in desktop UI (4cfc8e5)
+
+## [v0.3.5] - 2026-03-27
+
+- fix: use previous stable tag for release changelog (b00cff7)
+- fix: load chat header title from session detail (0b8443c)
+- fix: stabilize chat history loading scroll behavior (87190c6)
+- fix: animate todo panel swap without layout jank (ca8a672)
+- feat: add frosted glass toggle in appearance settings (662070c)
+- fix: apply overlay scrollbar to textarea, hide all native scrollbars (5dce51f)
+- fix: frosted glass not rendering in Tauri production build & overlay scrollbar positioning (96e72c1)
+- feat: replace native scrollbars with global overlay scrollbar system (da09781)
+- refactor: simplify @ and / menus with cleaner layout and unified style (f5bddec)
+- refactor: redesign ModelSelector for glass aesthetic (33a9dd2)
+- refactor: unify frosted glass system with CSS utility classes (0e459f9)
+- style: introduce frosted glass effect to all floating surfaces (ae10178)
+- fix: remove extra padding from message toggles (4eb916a)
+
+## [v0.3.4] - 2026-03-24
+
+- fix: align markdown copy buttons with header text (80e59ce)
+- fix: render markdown images without streamdown wrapper controls (650851f)
+- fix: remove code size-based rendering limits (42171e7)
+- fix: remove contain-intrinsic-size that caused scroll jank (7942144)
+
+## [v0.3.3] - 2026-03-24
+
+- fix: resolve TypeScript errors in MarkdownRenderer for release (1abcdf1)
+- fix: exclude task tool from compact inline permission mode (5f39aff)
+- style: remove left accent line from TaskRenderer, restore badge status colors (1cb6044)
+- style: refine TaskRenderer visual hierarchy (263b74b)
+- fix: show tool description from input while running, not just after completion (b65d16e)
+- fix: reduce excessive right padding in expanded reasoning content (885668d)
+- fix: panel dropdown menu hover overflow — use inset padding with rounded items (02653bf)
+- fix: table copy button pinned outside scroll, mobile always-visible copy buttons (2cdef17)
+- style: unify tool output header height to h-8 (32px) (c566b1a)
+- style: unify message flow border-radius to a tighter 3-tier system (4a8a89f)
+- refactor: redesign markdown code blocks, tables, and inline code styles (11f6222)
+
+## [v0.3.2] - 2026-03-24
+
+- fix: align fullscreen diff test mocks with typed children (fdf1a74)
+- fix: restore release validation after fullscreen refactor (ef2d755)
+- fix: adjust outline index spacing for visual balance (fb98097)
+- refactor: unify fullscreen components into generic FullscreenViewer (9e6d8ed)
+- refactor: redesign settings UI with section-based layout and cleaner primitives (478351a)
+
 ## [v0.3.1] - 2026-03-23
 
 - fix: unify chevron arrow direction - collapsed points right, expanded points down (3557e5a)

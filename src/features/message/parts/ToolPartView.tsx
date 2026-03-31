@@ -50,7 +50,7 @@ export const ToolPartView = memo(function ToolPartView({
 }: ToolPartViewProps) {
   const { t } = useTranslation('message')
   const { state, tool: toolName } = part
-  const title = state.title || ''
+  const title = state.title || getInputDescription(part) || ''
 
   const duration = state.time?.start && state.time?.end ? state.time.end - state.time.start : undefined
 
@@ -70,23 +70,27 @@ export const ToolPartView = memo(function ToolPartView({
     ? findQuestionRequestForTool(pendingQuestions, part.callID, childSessionId)
     : undefined
 
+  const toolDone = state.status === 'completed' || state.status === 'error'
   // ── 延迟卸载 edit/write 权限组件 ──
   // 用户授权后 permissionRequest 会立即消失，但工具结果可能还没到，
   // 为了避免 "权限消失→空白→结果出现" 的跳动，缓存最后一次权限请求，
   // 在工具完成之前继续渲染（以 resolved 状态）
-  const lastPermissionRef = useRef(permissionRequest)
-  if (permissionRequest) {
-    lastPermissionRef.current = permissionRequest
-  }
+  const [cachedPermissionRequest, setCachedPermissionRequest] = useState(permissionRequest)
+  useEffect(() => {
+    if (permissionRequest) {
+      setCachedPermissionRequest(permissionRequest)
+      return
+    }
+    if (toolDone) {
+      setCachedPermissionRequest(undefined)
+    }
+  }, [permissionRequest, toolDone])
+
+  const effectivePermissionRequest = permissionRequest || cachedPermissionRequest
   const isFilePermission =
-    lastPermissionRef.current?.permission === 'edit' || lastPermissionRef.current?.permission === 'write'
-  // 工具完成后清除缓存
-  const toolDone = state.status === 'completed' || state.status === 'error'
-  if (toolDone) {
-    lastPermissionRef.current = undefined
-  }
+    effectivePermissionRequest?.permission === 'edit' || effectivePermissionRequest?.permission === 'write'
   // 权限已批准但工具还没完成 → 保留渲染
-  const permissionResolved = !permissionRequest && !!lastPermissionRef.current && isFilePermission && !toolDone
+  const permissionResolved = !permissionRequest && !!cachedPermissionRequest && isFilePermission && !toolDone
 
   const hasPendingInteraction = !!permissionRequest || !!questionRequest
   // 精简模式：非 edit/write 权限时不隐藏 ToolBody（ToolBody 已经渲染了命令内容）
@@ -94,7 +98,10 @@ export const ToolPartView = memo(function ToolPartView({
     permissionRequest?.permission === 'edit' || permissionRequest?.permission === 'write' || permissionResolved
   const hideToolBodyForPermission = isEditWritePermission
   // 精简模式：ToolBody 已渲染时，InlinePermission 只显示按钮
-  const permissionContentHidden = compactInlinePermission && !isEditWritePermission && !!permissionRequest
+  // task 工具除外：task renderer 无法显示详细的工具请求内容，需要完整展示权限信息
+  const isTaskTool = toolName.toLowerCase() === 'task'
+  const permissionContentHidden =
+    compactInlinePermission && !isEditWritePermission && !isTaskTool && !!permissionRequest
   const effectiveExpanded = expanded || hasPendingInteraction || permissionResolved
   const shouldRenderBody = useDelayedRender(effectiveExpanded)
   const isReadable = isReadableTool(toolName)
@@ -104,7 +111,6 @@ export const ToolPartView = memo(function ToolPartView({
       if (immersiveMode && descriptive && isReadable) {
         hasAutoExpandedReadableRef.current = true
       }
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- 运行中或待交互时保持展开
       setExpanded(true)
     } else if (immersiveMode && descriptive && !isReadable) {
       setExpanded(false)
@@ -135,7 +141,7 @@ export const ToolPartView = memo(function ToolPartView({
   )
 
   // 需要渲染权限组件的请求对象：优先用活跃的，否则用缓存的（resolved 态）
-  const displayPermission = permissionRequest || (permissionResolved ? lastPermissionRef.current : undefined)
+  const displayPermission = permissionRequest || (permissionResolved ? cachedPermissionRequest : undefined)
 
   const bodyContent = (
     <>
@@ -242,7 +248,7 @@ export const ToolPartView = memo(function ToolPartView({
         {/* Content column */}
         <div className="min-w-0">
           <button
-            className="flex items-center gap-2 w-full h-9 text-left px-2 hover:bg-bg-200/40 rounded-lg transition-colors group/header"
+            className="flex items-center gap-2 w-full h-9 text-left pl-2 pr-0 hover:bg-bg-200/40 rounded-sm transition-colors group/header"
             onClick={() => setExpanded(!expanded)}
           >
             <div className="flex items-baseline gap-2 overflow-hidden flex-1 min-w-0">
@@ -319,7 +325,7 @@ export const ToolPartView = memo(function ToolPartView({
       <div className="flex-1 min-w-0">
         {/* Header - h-9 和 timeline 图标行等高 */}
         <button
-          className="flex items-center gap-2.5 w-full h-9 text-left px-2 hover:bg-bg-200/40 rounded-lg transition-colors group/header"
+          className="flex items-center gap-2.5 w-full h-9 text-left pl-2 pr-0 hover:bg-bg-200/40 rounded-sm transition-colors group/header"
           onClick={() => setExpanded(!expanded)}
         >
           <div className="flex items-baseline gap-2 overflow-hidden flex-1 min-w-0">
@@ -463,6 +469,12 @@ function getTaskChildSessionId(part: ToolPart): string | undefined {
   if (part.tool.toLowerCase() !== 'task') return undefined
   const metadata = part.state.metadata as Record<string, unknown> | undefined
   return metadata?.sessionId as string | undefined
+}
+
+/** Extract description from tool input as title fallback (available while running) */
+function getInputDescription(part: ToolPart): string | undefined {
+  const input = part.state.input as Record<string, unknown> | undefined
+  return (input?.description as string) || undefined
 }
 
 // ============================================

@@ -6,7 +6,6 @@
 import { useState, useEffect, useLayoutEffect, useRef, useImperativeHandle, forwardRef, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { getCommands, type Command } from '../../api/command'
-import { TerminalIcon } from '../../components/Icons'
 import { apiErrorHandler } from '../../utils'
 
 // ============================================
@@ -188,7 +187,7 @@ export const SlashCommandMenu = forwardRef<SlashCommandMenuHandle, SlashCommandM
     <div
       ref={menuRef}
       data-dropdown-open
-      className="absolute z-50 w-full md:max-w-[360px] flex flex-col bg-bg-000 border border-border-300 rounded-lg shadow-lg overflow-hidden"
+      className="absolute z-50 w-full md:max-w-[360px] flex flex-col glass border border-border-200/60 rounded-xl shadow-lg overflow-hidden"
       style={{
         bottom: '100%',
         left: 0,
@@ -196,19 +195,12 @@ export const SlashCommandMenu = forwardRef<SlashCommandMenuHandle, SlashCommandM
         maxHeight: dynamicMaxHeight ? `${dynamicMaxHeight}px` : 'min(320px, calc(100dvh - 10rem))',
       }}
     >
-      {/* Header */}
-      <div className="px-3 py-2 border-b border-border-200 flex items-center gap-2 text-xs text-text-400">
-        <TerminalIcon size={14} />
-        <span>{t('slashCommand.commands')}</span>
-        {query && <span className="text-text-300">/ {query}</span>}
-      </div>
-
       {/* Items List */}
-      <div ref={listRef} className="flex-1 overflow-y-auto custom-scrollbar">
-        {loading && <div className="px-3 py-4 text-center text-sm text-text-400">{t('common:loading')}</div>}
+      <div ref={listRef} className="flex-1 overflow-y-auto custom-scrollbar p-1.5">
+        {loading && <div className="px-2 py-4 text-center text-sm text-text-400">{t('common:loading')}</div>}
 
         {!loading && filteredCommands.length === 0 && (
-          <div className="px-3 py-4 text-center text-sm text-text-400">
+          <div className="px-2 py-4 text-center text-sm text-text-400">
             {query ? t('slashCommand.noMatchingCommands') : t('slashCommand.noCommandsAvailable')}
           </div>
         )}
@@ -217,14 +209,16 @@ export const SlashCommandMenu = forwardRef<SlashCommandMenuHandle, SlashCommandM
           <button
             key={cmd.name}
             title={cmd.description}
-            className={`w-full px-3 py-2.5 md:py-2 flex items-center gap-3 text-left transition-colors ${
-              index === activeIndex ? 'bg-accent-main-100/10' : 'hover:bg-bg-100 active:bg-bg-100'
+            className={`w-full px-2.5 py-2 md:py-1.5 flex items-center gap-3 text-left rounded-lg transition-colors ${
+              index === activeIndex ? 'bg-accent-main-100/10 text-text-100' : 'text-text-200 hover:bg-bg-100/40'
             }`}
             onClick={() => onSelect(cmd)}
             onPointerEnter={() => setSelectedIndex(index)}
           >
             <span
-              className="text-accent-main-100 font-mono text-sm flex-shrink-0 truncate leading-5"
+              className={`font-mono text-sm flex-shrink-0 truncate leading-5 ${
+                index === activeIndex ? 'text-accent-main-100' : 'text-text-300'
+              }`}
               style={{ width: commandColumnWidth }}
             >
               /{cmd.name}
@@ -238,7 +232,7 @@ export const SlashCommandMenu = forwardRef<SlashCommandMenuHandle, SlashCommandM
       </div>
 
       {/* Footer Hints - 只在桌面端显示 */}
-      <div className="hidden md:flex px-3 py-1.5 border-t border-border-200 text-xs text-text-500 gap-3">
+      <div className="hidden md:flex px-3 py-1.5 text-[11px] text-text-500/70 gap-3">
         <span>{t('common:upDownSelect')}</span>
         <span>{t('common:enterRun')}</span>
         <span>{t('common:escCancel')}</span>

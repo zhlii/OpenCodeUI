@@ -62,7 +62,7 @@
     "agentBehavior": "Agent 行为",
     "agentBehaviorDesc": "工具操作的执行默认值",
     "autoApprove": "自动放行",
-    "autoApproveDesc": "使用本地规则自动放行，一次性同步到服务器",
+    "autoApproveDesc": "开启后前端自动以 once 权限放行工具请求",
     "sidebarRecents": "侧边栏最近记录",
     "sidebarRecentsDesc": "最近对话的可选文件夹视图",
     "folderStyleRecents": "文件夹式最近记录",
@@ -116,6 +116,8 @@
     "modeDark": "深色",
     "wideMode": "宽屏模式",
     "wideModeDesc": "展开对话区域以适应长输出",
+    "glassEffect": "毛玻璃效果",
+    "glassEffectDesc": "对输入框、菜单、对话框等浮层启用背景模糊效果",
     "diffStyle": "Diff 边栏样式",
     "diffStyleDesc": "差异视图中变更行的标记方式",
     "diffStyleMarkers": "+/− 符号",
@@ -128,7 +130,15 @@
     "languages": {
       "en": "English",
       "zh-CN": "简体中文"
-    }
+    },
+    "sidebar": "侧边栏",
+    "sidebarDesc": "侧边栏布局和最近记录",
+    "folderStyleRecents": "文件夹式最近记录",
+    "folderStyleRecentsDesc": "按项目文件夹分组最近的对话，同时保留默认列表",
+    "folderStyleRecentsShowDiff": "文件夹模式显示 Diff",
+    "folderStyleRecentsShowDiffDesc": "在文件夹式最近记录中显示会话的增删和文件统计",
+    "showChildSessions": "始终显示子会话",
+    "showChildSessionsDesc": "始终在父会话下列出子会话。关闭时仅显示活跃或正在查看的子会话"
   },
   "notifications": {
     "systemNotifications": "系统通知",

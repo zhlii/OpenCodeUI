@@ -50,6 +50,8 @@ interface LayoutState {
   // 侧边栏
   sidebarExpanded: boolean
   sidebarFolderRecents: boolean
+  sidebarFolderRecentsShowDiff: boolean
+  sidebarShowChildSessions: boolean
 
   // 右侧栏
   rightPanelOpen: boolean
@@ -64,6 +66,8 @@ type Subscriber = () => void
 
 const STORAGE_KEY_SIDEBAR = 'opencode-sidebar-expanded'
 const STORAGE_KEY_SIDEBAR_FOLDER_RECENTS = 'opencode-sidebar-folder-recents'
+const STORAGE_KEY_SIDEBAR_FOLDER_RECENTS_SHOW_DIFF = 'opencode-sidebar-folder-recents-show-diff'
+const STORAGE_KEY_SIDEBAR_SHOW_CHILD_SESSIONS = 'opencode-sidebar-show-child-sessions'
 
 class LayoutStore {
   private state: LayoutState = {
@@ -78,6 +82,8 @@ class LayoutStore {
     },
     sidebarExpanded: true,
     sidebarFolderRecents: false,
+    sidebarFolderRecentsShowDiff: true,
+    sidebarShowChildSessions: false,
     rightPanelOpen: false,
     rightPanelWidth: 450,
     bottomPanelOpen: false,
@@ -99,11 +105,21 @@ class LayoutStore {
         this.state.sidebarFolderRecents = savedFolderRecents === 'true'
       }
 
+      const savedFolderRecentsShowDiff = localStorage.getItem(STORAGE_KEY_SIDEBAR_FOLDER_RECENTS_SHOW_DIFF)
+      if (savedFolderRecentsShowDiff !== null) {
+        this.state.sidebarFolderRecentsShowDiff = savedFolderRecentsShowDiff !== 'false'
+      }
+
+      const savedShowChildSessions = localStorage.getItem(STORAGE_KEY_SIDEBAR_SHOW_CHILD_SESSIONS)
+      if (savedShowChildSessions !== null) {
+        this.state.sidebarShowChildSessions = savedShowChildSessions === 'true'
+      }
+
       // 右侧面板宽度
       const savedWidth = localStorage.getItem('opencode-right-panel-width')
       if (savedWidth) {
         const width = parseInt(savedWidth)
-        if (!isNaN(width) && width >= 300 && width <= MAX_RIGHT_PANEL_WIDTH) {
+        if (!isNaN(width) && width >= 160 && width <= MAX_RIGHT_PANEL_WIDTH) {
           this.state.rightPanelWidth = width
         }
       }
@@ -160,6 +176,28 @@ class LayoutStore {
       localStorage.setItem(STORAGE_KEY_SIDEBAR_FOLDER_RECENTS, String(enabled))
     } catch {
       // ignore
+    }
+    this.notify()
+  }
+
+  setSidebarFolderRecentsShowDiff(enabled: boolean) {
+    if (this.state.sidebarFolderRecentsShowDiff === enabled) return
+    this.state.sidebarFolderRecentsShowDiff = enabled
+    try {
+      localStorage.setItem(STORAGE_KEY_SIDEBAR_FOLDER_RECENTS_SHOW_DIFF, String(enabled))
+    } catch {
+      // ignore
+    }
+    this.notify()
+  }
+
+  setSidebarShowChildSessions(enabled: boolean) {
+    if (this.state.sidebarShowChildSessions === enabled) return
+    this.state.sidebarShowChildSessions = enabled
+    try {
+      localStorage.setItem(STORAGE_KEY_SIDEBAR_SHOW_CHILD_SESSIONS, String(enabled))
+    } catch {
+      /* ignore */
     }
     this.notify()
   }
@@ -398,7 +436,7 @@ class LayoutStore {
   }
 
   setRightPanelWidth(width: number) {
-    this.state.rightPanelWidth = Math.min(Math.max(width, 300), MAX_RIGHT_PANEL_WIDTH)
+    this.state.rightPanelWidth = Math.min(Math.max(width, 160), MAX_RIGHT_PANEL_WIDTH)
     try {
       localStorage.setItem('opencode-right-panel-width', this.state.rightPanelWidth.toString())
     } catch {

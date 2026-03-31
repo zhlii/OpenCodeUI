@@ -124,7 +124,7 @@ export const ReasoningPartView = memo(function ReasoningPartView({ part, isStrea
           type="button"
           onClick={() => setExpanded(!expanded)}
           aria-expanded={expanded}
-          className="group/reasoning flex w-full min-w-0 items-start gap-2 m-0 border-0 bg-transparent p-0 pr-2 text-left cursor-pointer text-text-400 hover:text-text-200"
+          className="group/reasoning flex w-full min-w-0 items-start gap-2 m-0 border-0 bg-transparent p-0 text-left cursor-pointer text-text-400 hover:text-text-200"
         >
           <div ref={summaryContainerRef} className="relative min-w-0 flex-1 overflow-hidden">
             <span className="relative inline-block min-w-0 max-w-full align-top">
@@ -159,11 +159,11 @@ export const ReasoningPartView = memo(function ReasoningPartView({ part, isStrea
           <div className="min-h-0 min-w-0 overflow-hidden" style={{ clipPath: 'inset(0 -100% 0 -100%)' }}>
             {shouldRenderBody &&
               (isMarkdownMode ? (
-                <div className="pt-0.5 pr-7 text-[12px]">
+                <div className="text-[12px]">
                   <MarkdownRenderer content={displayText} variant="reasoning" isStreaming={isPartStreaming} />
                 </div>
               ) : (
-                <div className="pt-0.5 pr-7 text-[12px] leading-6 italic whitespace-pre-wrap break-words overflow-x-hidden text-text-300">
+                <div className="text-[12px] leading-6 italic whitespace-pre-wrap break-words overflow-x-hidden text-text-300">
                   {displayText}
                 </div>
               ))}
@@ -213,7 +213,7 @@ export const ReasoningPartView = memo(function ReasoningPartView({ part, isStrea
 
   return (
     <div
-      className={`ring-1 ring-inset ring-border-300/20 rounded-xl overflow-hidden transition-all duration-300 ease-out ${
+      className={`ring-1 ring-inset ring-border-300/20 rounded-lg overflow-hidden transition-all duration-300 ease-out ${
         expanded ? 'w-full' : 'w-[260px]'
       }`}
     >

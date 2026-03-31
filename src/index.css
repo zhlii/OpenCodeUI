@@ -1,6 +1,18 @@
 @import 'tailwindcss';
 
 /* ============================================
+ * Tauri WebView backdrop-filter 修复
+ * ============================================
+ * WebView2 (Windows) 和 WebKitGTK (Linux) 的部分版本
+ * 不渲染 backdrop-filter blur。
+ * will-change:auto 强制 GPU 合成层，使 blur 生效。
+ * .tauri-app class 由 main.tsx 在 Tauri 环境下添加到 <html>。
+ */
+.tauri-app * {
+  will-change: auto;
+}
+
+/* ============================================
  * Mobile Viewport & Safe Area
  * ============================================ */
 
@@ -162,10 +174,10 @@ body,
    * Shadows
    * ============================================ */
   --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
-  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1);
-  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1);
-  --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1);
-  --shadow-float: 0 4px 20px 0 rgb(0 0 0 / 0.15);
+  --shadow-md: 0 2px 6px -1px rgb(0 0 0 / 0.08);
+  --shadow-lg: 0 4px 12px -2px rgb(0 0 0 / 0.08);
+  --shadow-xl: 0 6px 16px -3px rgb(0 0 0 / 0.1);
+  --shadow-float: 0 4px 12px -2px rgb(0 0 0 / 0.1);
 
   /* ============================================
    * Sizing - Collapsible Components
@@ -291,14 +303,6 @@ body {
 }
 
 /* Utility classes */
-.no-scrollbar::-webkit-scrollbar {
-  display: none !important;
-}
-
-.no-scrollbar {
-  -ms-overflow-style: none !important;
-  scrollbar-width: none !important;
-}
 
 /*
  * Fix: Tailwind .truncate 使用 overflow:hidden 会裁切 descender 字母 (g/j/p/q/y)
@@ -314,40 +318,139 @@ body {
   white-space: nowrap;
 }
 
-/* 常用工具类别名 */
-.scrollbar-none {
-  -ms-overflow-style: none !important;
-  scrollbar-width: none !important;
+/* ============================================
+ * 全局 Overlay Scrollbar
+ * ============================================
+ * 原生滚动条全局隐藏，自绘 thumb 由 overlayScrollbar.ts 注入。
+ * textarea 无法注入子元素所以没有 overlay thumb，
+ * 但原生滚动条一样隐藏——textarea 内容靠滑动/键盘滚动。
+ *
+ * 下方旧 class 保留为兼容空壳，仅声明 overflow 方向，
+ * 不再包含任何原生滚动条样式。
+ */
+* {
+  scrollbar-width: none;
+}
+*::-webkit-scrollbar {
+  display: none;
 }
 
+/* 隐藏滚动条（包括 overlay thumb 也不要）—— 旧 class 兼容 */
+.no-scrollbar,
+.scrollbar-none {
+  scrollbar-width: none !important;
+}
+.no-scrollbar::-webkit-scrollbar,
 .scrollbar-none::-webkit-scrollbar {
   display: none !important;
 }
 
-/* Custom scrollbar - 恢复显示，尽可能使用 overlay */
+/* overflow 方向空壳 */
 .custom-scrollbar {
-  scrollbar-width: thin;
-  scrollbar-color: hsl(var(--border-300) / 0.5) transparent;
-  overflow-y: overlay; /* 尝试 overlay */
+  overflow-y: auto;
+}
+.panel-scrollbar {
+  overflow: auto;
+}
+.panel-scrollbar-y {
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.panel-scrollbar-x {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.code-scrollbar {
+  overflow: auto;
+}
+.tabs-scrollbar {
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
-/* Mobile: hide scrollbars entirely */
-@media (max-width: 768px) {
-  .custom-scrollbar {
-    scrollbar-width: none !important;
-  }
-  .custom-scrollbar::-webkit-scrollbar {
-    width: 0 !important;
-    height: 0 !important;
-    display: none !important;
-  }
+/* ── Overlay thumb (vertical, default) ── */
+.os-thumb {
+  position: absolute;
+  top: 0;
+  width: 12px;
+  opacity: 0;
+  transition: opacity 200ms ease;
+  cursor: default;
+  user-select: none;
+  pointer-events: none;
+  z-index: 50;
 }
 
-/* 兼容性回退 */
-@supports not (overflow-y: overlay) {
-  .custom-scrollbar {
-    overflow-y: auto;
-  }
+.os-thumb::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  border-radius: 9999px;
+  background-color: hsl(var(--border-300) / 0.35);
+  transition:
+    background-color 150ms ease,
+    width 120ms ease;
+}
+
+.os-thumb.os-visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.os-thumb:hover::after,
+.os-thumb.os-dragging::after {
+  background-color: hsl(var(--border-300) / 0.6);
+  width: 6px;
+}
+
+/* ── Overlay thumb (horizontal) ── */
+.os-thumb.os-thumb-x {
+  top: auto;
+  left: 0;
+  bottom: 0;
+  width: auto;
+  height: 12px;
+}
+
+.os-thumb.os-thumb-x::after {
+  left: 0;
+  right: 0;
+  top: 50%;
+  bottom: auto;
+  transform: translateY(-50%);
+  width: auto;
+  height: 4px;
+  transition:
+    background-color 150ms ease,
+    height 120ms ease;
+}
+
+.os-thumb.os-thumb-x:hover::after,
+.os-thumb.os-thumb-x.os-dragging::after {
+  width: auto;
+  height: 6px;
+}
+
+/* ============================================
+ * Input Textarea + Overlay - 共享样式确保完全对齐
+ * ============================================ */
+
+/* 面板统一过渡效果 */
+.panel-transition {
+  transition-property: width, height, opacity, transform;
+  transition-duration: 200ms;
+  transition-timing-function: cubic-bezier(0.25, 0.1, 0.25, 1);
+}
+
+/* 面板统一阴影（可选，用于浮动状态） */
+.panel-shadow {
+  box-shadow:
+    0 0 0 1px hsl(var(--border-200) / 0.5),
+    0 4px 12px hsl(var(--always-black) / 0.08);
 }
 
 /* ============================================
@@ -385,229 +488,10 @@ body {
   overflow: hidden;
 }
 
-/* Textarea 特殊处理 - 保证光标对齐 */
-textarea.custom-scrollbar {
-  scrollbar-width: thin;
-  scrollbar-color: hsl(var(--border-300) / 0.5) transparent;
-}
-
-textarea.custom-scrollbar::-webkit-scrollbar {
-  width: 6px;
-  background: transparent;
-}
-
-textarea.custom-scrollbar::-webkit-scrollbar-thumb {
-  background-color: hsl(var(--border-300) / 0.4);
-  border-radius: 99px;
-}
-
-.custom-scrollbar::-webkit-scrollbar {
-  width: 10px; /* 稍微宽一点以支持透明边框技巧 */
-  background: transparent;
-}
-
-.custom-scrollbar::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.custom-scrollbar::-webkit-scrollbar-thumb {
-  background-color: hsl(var(--border-300) / 0.4);
-  border-radius: 99px;
-  border: 3px solid transparent; /* 透明边框让 thumb 变小并产生间距感 */
-  background-clip: padding-box; /* 让背景色只在 content-box 内绘制 */
-}
-
-.custom-scrollbar::-webkit-scrollbar-thumb:hover {
-  background-color: hsl(var(--border-300) / 0.7);
-}
-
-/* ============================================
- * Panel Scrollbar - 面板统一滚动条样式
- * ============================================
- * 用于面板内容区域，支持水平和垂直滚动
- * 特点：细滚动条、悬浮时显示、不占用布局空间
- */
-.panel-scrollbar {
-  scrollbar-width: thin;
-  scrollbar-color: hsl(var(--border-300) / 0.3) transparent;
-  overflow: auto;
-}
-
-/* 尝试使用 overlay 滚动条（不占用空间） */
-@supports (overflow: overlay) {
-  .panel-scrollbar {
-    overflow: overlay;
-  }
-}
-
-.panel-scrollbar::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-  background: transparent;
-}
-
-.panel-scrollbar::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.panel-scrollbar::-webkit-scrollbar-thumb {
-  background-color: hsl(var(--border-300) / 0.3);
-  border-radius: 99px;
-  border: 2px solid transparent;
-  background-clip: padding-box;
-}
-
-.panel-scrollbar::-webkit-scrollbar-thumb:hover {
-  background-color: hsl(var(--border-300) / 0.6);
-}
-
-.panel-scrollbar::-webkit-scrollbar-corner {
-  background: transparent;
-}
-
-/**
- * Code scrollbar - 用于代码预览区域
- * 横向滚动条极细且半透明，避免遮挡代码最后一行
- */
-.code-scrollbar {
-  scrollbar-width: thin;
-  scrollbar-color: hsl(var(--border-300) / 0.25) transparent;
-  overflow: auto;
-}
-
-@supports (overflow: overlay) {
-  .code-scrollbar {
-    overflow: overlay;
-  }
-}
-
-.code-scrollbar::-webkit-scrollbar {
-  width: 6px;
-  height: 4px;
-  background: transparent;
-}
-
-.code-scrollbar::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.code-scrollbar::-webkit-scrollbar-thumb {
-  background-color: hsl(var(--border-300) / 0.25);
-  border-radius: 99px;
-}
-
-.code-scrollbar::-webkit-scrollbar-thumb:hover {
-  background-color: hsl(var(--border-300) / 0.5);
-}
-
-.code-scrollbar::-webkit-scrollbar-corner {
-  background: transparent;
-}
-
-/* 仅垂直滚动的变体 */
-.panel-scrollbar-y {
-  scrollbar-width: thin;
-  scrollbar-color: hsl(var(--border-300) / 0.3) transparent;
-  overflow-y: auto;
-  overflow-x: hidden;
-}
-
-@supports (overflow-y: overlay) {
-  .panel-scrollbar-y {
-    overflow-y: overlay;
-  }
-}
-
-.panel-scrollbar-y::-webkit-scrollbar {
-  width: 8px;
-  background: transparent;
-}
-
-.panel-scrollbar-y::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.panel-scrollbar-y::-webkit-scrollbar-thumb {
-  background-color: hsl(var(--border-300) / 0.3);
-  border-radius: 99px;
-  border: 2px solid transparent;
-  background-clip: padding-box;
-}
-
-.panel-scrollbar-y::-webkit-scrollbar-thumb:hover {
-  background-color: hsl(var(--border-300) / 0.6);
-}
-
-/* 仅水平滚动的变体 */
-.panel-scrollbar-x {
-  scrollbar-width: thin;
-  scrollbar-color: hsl(var(--border-300) / 0.3) transparent;
-  overflow-x: auto;
-  overflow-y: hidden;
-}
-
-@supports (overflow-x: overlay) {
-  .panel-scrollbar-x {
-    overflow-x: overlay;
-  }
-}
-
-.panel-scrollbar-x::-webkit-scrollbar {
-  height: 6px;
-  background: transparent;
-}
-
-.panel-scrollbar-x::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.panel-scrollbar-x::-webkit-scrollbar-thumb {
-  background-color: hsl(var(--border-300) / 0.3);
-  border-radius: 99px;
-}
-
-.panel-scrollbar-x::-webkit-scrollbar-thumb:hover {
-  background-color: hsl(var(--border-300) / 0.6);
-}
-
-/* Tabs 水平滚动 - 彻底隐藏滚动条 */
-.tabs-scrollbar {
-  scrollbar-width: none !important;
-  -ms-overflow-style: none !important;
-  overflow-x: auto;
-  overflow-y: hidden;
-}
-
-.tabs-scrollbar::-webkit-scrollbar {
-  display: none !important;
-  width: 0 !important;
-  height: 0 !important;
-  background: transparent;
-}
-
 /* ============================================
  * Panel Unified Styles - 面板统一样式
  * ============================================
  * 用于 RightPanel 和 BottomPanel 的统一视觉规范
- */
-
-/* 面板统一过渡效果 */
-.panel-transition {
-  transition-property: width, height, opacity, transform;
-  transition-duration: 200ms;
-  transition-timing-function: cubic-bezier(0.25, 0.1, 0.25, 1);
-}
-
-/* 面板统一阴影（可选，用于浮动状态） */
-.panel-shadow {
-  box-shadow:
-    0 0 0 1px hsl(var(--border-200) / 0.5),
-    0 4px 12px hsl(var(--always-black) / 0.08);
-}
-
-/* ============================================
- * Mobile Responsive - 移动端适配
- * ============================================
  */
 
 /* 移动端面板覆盖层 */
@@ -942,18 +826,92 @@ textarea.custom-scrollbar::-webkit-scrollbar-thumb {
 }
 
 /* ============================================
- * Chat Message Item - content-visibility 优化
+ * Frosted Glass 毛玻璃浮层系统
  * ============================================
- * content-visibility: auto 让浏览器跳过视口外元素的 layout/paint。
- * loadMore prepend 时通过 .prepending class 临时禁用，
- * 确保 column-reverse 下新节点用真实高度，避免跳变。
+ * .glass       — 通用浮层（下拉菜单、输入框、Dialog、Toast 等）
+ * .glass-alt   — bg-100 底色变体（sidebar footer、popover 等）
+ *
+ * 调参改这里，全局生效。组件里只写 class 名，不写具体数值。
+ *
+ * 注意：
+ *  - backdrop-filter 里不能用 var()，webkit2gtk (Linux Tauri) 不支持
+ *  - -webkit- 前缀必须写在非前缀前面，否则构建工具会删掉非前缀版本
+ *  - 毛玻璃开关由 <html data-glass> 属性驱动
+ *    有 data-glass → 半透明 + blur
+ *    无 data-glass → 实色背景回退
  */
-.chat-message-item {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 500px;
+
+/* -- 共用底色 / 边框色 -- */
+.glass {
+  background-color: hsl(var(--bg-000));
+  border-color: hsl(var(--border-200) / 0.6);
 }
 
-.prepending .chat-message-item {
-  content-visibility: visible !important;
-  contain-intrinsic-size: auto !important;
+.glass-alt {
+  background-color: hsl(var(--bg-100));
+  border-color: hsl(var(--border-200) / 0.6);
+}
+
+/* -- data-glass 开启时：半透明 + blur -- */
+:root[data-glass] .glass {
+  background-color: hsl(var(--bg-000) / 0.5);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+
+:root[data-glass] .glass-alt {
+  background-color: hsl(var(--bg-100) / 0.5);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+}
+
+/* ============================================
+ * Todo Swap Transition
+ * ============================================ */
+
+[data-input-box],
+[data-floating-actions] {
+  transform-origin: center bottom;
+  transition:
+    opacity 180ms cubic-bezier(0.4, 0, 0.2, 1),
+    transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform, opacity;
+}
+
+[data-input-box][data-todo-swap='hidden'] {
+  opacity: 0;
+  transform: translateY(18px) scale(0.985);
+  pointer-events: none;
+}
+
+/* todo panel 展开时同步隐藏 FloatingActions（undo/redo/permission 等） */
+:has([data-input-box][data-todo-swap='hidden']) > [data-floating-actions] {
+  opacity: 0;
+  transform: translateY(18px) scale(0.985);
+  pointer-events: none;
+}
+
+.todo-swap-panel {
+  transform-origin: center bottom;
+  opacity: 0;
+  transform: translateY(18px) scale(0.985);
+  transition:
+    opacity 180ms cubic-bezier(0.22, 1, 0.36, 1),
+    transform 260ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: transform, opacity;
+  pointer-events: none;
+}
+
+.todo-swap-panel[data-state='open'] {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-input-box],
+  [data-floating-actions],
+  .todo-swap-panel {
+    transition: none;
+  }
 }

@@ -328,7 +328,7 @@ export const MentionMenu = forwardRef<MentionMenuHandle, MentionMenuProps>(funct
     <div
       ref={menuRef}
       data-dropdown-open
-      className="absolute z-50 w-full md:max-w-[360px] flex flex-col bg-bg-000 border border-border-300 rounded-lg shadow-lg overflow-hidden"
+      className="absolute z-50 w-full md:max-w-[360px] flex flex-col glass border border-border-200/60 rounded-xl shadow-lg overflow-hidden"
       style={{
         bottom: '100%',
         left: 0,
@@ -336,14 +336,24 @@ export const MentionMenu = forwardRef<MentionMenuHandle, MentionMenuProps>(funct
         maxHeight: dynamicMaxHeight ? `${dynamicMaxHeight}px` : 'min(320px, calc(100dvh - 10rem))',
       }}
     >
-      {/* Path Breadcrumb - 只在有路径时显示 */}
-      {currentPath !== '.' && (
-        <div className="px-3 py-1.5 border-b border-border-200 flex items-center gap-1 text-xs text-text-400">
+      {/* Items List */}
+      <div ref={listRef} className="flex-1 overflow-y-auto custom-scrollbar p-1.5">
+        {loading && items.length === 0 && (
+          <div className="px-2 py-4 text-center text-sm text-text-400">{t('common:loading')}</div>
+        )}
+
+        {!loading && items.length === 0 && (
+          <div className="px-2 py-4 text-center text-sm text-text-400">
+            {query ? t('common:noResults') : t('common:emptyFolder')}
+          </div>
+        )}
+
+        {/* 返回上级 - 作为列表第一项 */}
+        {currentPath !== '.' && (
           <button
-            className="flex items-center gap-0.5 hover:text-text-200 active:text-text-100 transition-colors flex-shrink-0"
+            className="w-full px-2.5 py-2 md:py-1.5 flex items-center gap-2 text-left rounded-lg transition-colors text-text-300 hover:bg-bg-100/40 mb-0.5"
             onClick={() => {
               if (onNavigate) {
-                // 记住当前目录名，返回后定位到它
                 const pathParts = normalizePath(currentPath).split('/')
                 restoreFolderRef.current = pathParts[pathParts.length - 1] || null
                 const parentParts = pathParts.slice(0, -1)
@@ -353,30 +363,16 @@ export const MentionMenu = forwardRef<MentionMenuHandle, MentionMenuProps>(funct
             }}
             title={t('mention.goBack')}
           >
-            <span>←</span>
+            <span className="text-sm">←</span>
+            <span className="text-xs text-text-400 truncate">{normalizePath(currentPath)}</span>
           </button>
-          <span>/</span>
-          <span className="text-text-300 truncate">{normalizePath(currentPath)}</span>
-        </div>
-      )}
-
-      {/* Items List */}
-      <div ref={listRef} className="flex-1 overflow-y-auto custom-scrollbar">
-        {loading && items.length === 0 && (
-          <div className="px-3 py-4 text-center text-sm text-text-400">{t('common:loading')}</div>
-        )}
-
-        {!loading && items.length === 0 && (
-          <div className="px-3 py-4 text-center text-sm text-text-400">
-            {query ? t('common:noResults') : t('common:emptyFolder')}
-          </div>
         )}
 
         {items.map((item, index) => (
           <button
             key={`${item.type}-${item.value}`}
-            className={`w-full px-3 py-2.5 md:py-2 flex items-center justify-between text-left transition-colors ${
-              index === selectedIndex ? 'bg-accent-main-100/10' : 'hover:bg-bg-100 active:bg-bg-100'
+            className={`w-full px-2.5 py-2 md:py-1.5 flex items-center justify-between text-left rounded-lg transition-colors ${
+              index === selectedIndex ? 'bg-accent-main-100/10 text-text-100' : 'text-text-200 hover:bg-bg-100/40'
             }`}
             onClick={() => {
               // 文件夹：点击进入目录浏览，而不是选中
@@ -390,21 +386,21 @@ export const MentionMenu = forwardRef<MentionMenuHandle, MentionMenuProps>(funct
             onPointerEnter={() => setSelectedIndex(index)}
           >
             <div className="flex-1 min-w-0">
-              <div className="text-sm text-text-100 truncate">
+              <div className="text-sm truncate">
                 <TypeBadge type={item.type} />
                 <span className="ml-1.5">{item.displayName}</span>
               </div>
               {item.relativePath && item.type !== 'agent' && (
-                <div className="text-xs text-text-400 truncate">{item.relativePath}</div>
+                <div className="text-xs text-text-400 truncate ml-[calc(2ch+0.375rem)]">{item.relativePath}</div>
               )}
             </div>
-            {item.type === 'folder' && <span className="text-text-400 text-xs ml-2">→</span>}
+            {item.type === 'folder' && <span className="text-text-400 text-xs ml-2 flex-shrink-0">→</span>}
           </button>
         ))}
       </div>
 
       {/* Footer Hints - 只在桌面端显示 */}
-      <div className="hidden md:flex px-3 py-1.5 border-t border-border-200 text-xs text-text-500 gap-3">
+      <div className="hidden md:flex px-3 py-1.5 text-[11px] text-text-500/70 gap-3">
         <span>{t('common:upDownSelect')}</span>
         <span>{t('common:enterConfirmShort')}</span>
         <span>{t('common:escCancel')}</span>

@@ -241,5 +241,11 @@ export function useTheme() {
     setCompactInlinePermission: useCallback((enabled: boolean) => {
       themeStore.setCompactInlinePermission(enabled)
     }, []),
+
+    // 毛玻璃效果
+    glassEffect: state.glassEffect,
+    setGlassEffect: useCallback((enabled: boolean) => {
+      themeStore.setGlassEffect(enabled)
+    }, []),
   }
 }

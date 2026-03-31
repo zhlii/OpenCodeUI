@@ -6,7 +6,7 @@
  * - Content 列：代码内容，独立水平滚动
  *
  * 默认使用虚拟滚动；启用自动换行后切到 wrapped 渲染
- * 大文件跳过词级别diff和语法高亮
+ * 不再按文件大小、行数、字符数降级高亮或 diff
  */
 
 import { memo, useMemo, useRef, useState, useEffect, useCallback, useSyncExternalStore } from 'react'
@@ -23,10 +23,6 @@ import type { DiffStyle } from '../store/themeStore'
 
 const LINE_HEIGHT = 20 // 和 CodePreview 保持一致
 const OVERSCAN = 5
-
-// 大文件阈值 - 超过则跳过词级别diff
-const LARGE_FILE_LINES = 2000
-const LARGE_FILE_CHARS = 300000
 
 // ============================================
 // Types
@@ -180,7 +176,7 @@ function getGutterBgClass(type: LineType): string {
     case 'empty':
       return 'bg-bg-100/30'
     default:
-      return 'bg-bg-100'
+      return ''
   }
 }
 
@@ -245,10 +241,6 @@ export const DiffViewer = memo(function DiffViewer({
   const { diffStyle, codeWordWrap } = useSyncExternalStore(themeStore.subscribe, themeStore.getSnapshot)
   const resolvedWordWrap = wordWrap ?? codeWordWrap
 
-  // 检测大文件
-  const totalLines = before.split('\n').length + after.split('\n').length
-  const isLargeFile = totalLines > LARGE_FILE_LINES || before.length + after.length > LARGE_FILE_CHARS
-
   // 纯增加或纯删除时，split 模式另一边是空的没意义，自动降级为 unified
   const isAddOnly = !before.trim()
   const isDeleteOnly = !after.trim()
@@ -262,7 +254,6 @@ export const DiffViewer = memo(function DiffViewer({
           after={after}
           language={language}
           isResizing={isResizing}
-          isLargeFile={isLargeFile}
           maxHeight={maxHeight}
           diffStyle={diffStyle}
         />
@@ -275,7 +266,6 @@ export const DiffViewer = memo(function DiffViewer({
         after={after}
         language={language}
         isResizing={isResizing}
-        isLargeFile={isLargeFile}
         maxHeight={maxHeight}
         diffStyle={diffStyle}
       />
@@ -289,7 +279,6 @@ export const DiffViewer = memo(function DiffViewer({
         after={after}
         language={language}
         isResizing={isResizing}
-        isLargeFile={isLargeFile}
         maxHeight={maxHeight}
         diffStyle={diffStyle}
       />
@@ -313,7 +302,6 @@ const WrappedSplitDiffView = memo(function WrappedSplitDiffView({
   after,
   language,
   isResizing,
-  isLargeFile,
   maxHeight,
   diffStyle,
 }: {
@@ -321,13 +309,12 @@ const WrappedSplitDiffView = memo(function WrappedSplitDiffView({
   after: string
   language: string
   isResizing: boolean
-  isLargeFile: boolean
   maxHeight?: number
   diffStyle: DiffStyle
 }) {
   const { t } = useTranslation(['components', 'common'])
 
-  const shouldHighlight = !isResizing && language !== 'text' && !isLargeFile
+  const shouldHighlight = !isResizing && language !== 'text'
   const { output: beforeTokens } = useSyntaxHighlight(before, {
     lang: language,
     mode: 'tokens',
@@ -339,7 +326,7 @@ const WrappedSplitDiffView = memo(function WrappedSplitDiffView({
     enabled: shouldHighlight,
   })
 
-  const skipWordDiff = isResizing || isLargeFile
+  const skipWordDiff = isResizing
   const pairedLines = useMemo(() => computePairedLines(before, after, skipWordDiff), [before, after, skipWordDiff])
   const [expandedIds, setExpandedIds] = useState<Set<number>>(() => new Set())
   const displayLines = useMemo(() => collapseContextPaired(pairedLines, expandedIds), [pairedLines, expandedIds])
@@ -383,7 +370,7 @@ const WrappedSplitDiffView = memo(function WrappedSplitDiffView({
         <div
           className={`flex-1 flex items-stretch min-w-0 border-r border-border-100/30 ${getLineBgClass(pair.left.type)}`}
         >
-          <div className={`shrink-0 ${getGutterBgClass(pair.left.type)}`} style={{ width: gutterWidth }}>
+          <div className="shrink-0" style={{ width: gutterWidth }}>
             {useChangeBars ? (
               <div className="flex items-stretch h-full">
                 <div {...getChangeBarProps(pair.left.type)} />
@@ -413,7 +400,7 @@ const WrappedSplitDiffView = memo(function WrappedSplitDiffView({
 
         {/* Right panel */}
         <div className={`flex-1 flex items-stretch min-w-0 ${getLineBgClass(pair.right.type)}`}>
-          <div className={`shrink-0 ${getGutterBgClass(pair.right.type)}`} style={{ width: gutterWidth }}>
+          <div className="shrink-0" style={{ width: gutterWidth }}>
             {useChangeBars ? (
               <div className="flex items-stretch h-full">
                 <div {...getChangeBarProps(pair.right.type)} />
@@ -481,7 +468,6 @@ const SplitDiffView = memo(function SplitDiffView({
   after,
   language,
   isResizing,
-  isLargeFile,
   maxHeight,
   diffStyle,
 }: {
@@ -489,7 +475,6 @@ const SplitDiffView = memo(function SplitDiffView({
   after: string
   language: string
   isResizing: boolean
-  isLargeFile: boolean
   maxHeight?: number
   diffStyle: DiffStyle
 }) {
@@ -522,7 +507,7 @@ const SplitDiffView = memo(function SplitDiffView({
     enabled: shouldHighlight,
   })
 
-  const skipWordDiff = isResizing || isLargeFile
+  const skipWordDiff = isResizing
   const pairedLines = useMemo(() => computePairedLines(before, after, skipWordDiff), [before, after, skipWordDiff])
   const [expandedIds, setExpandedIds] = useState<Set<number>>(() => new Set())
   const displayLines = useMemo(() => collapseContextPaired(pairedLines, expandedIds), [pairedLines, expandedIds])
@@ -1092,7 +1077,6 @@ const WrappedUnifiedDiffView = memo(function WrappedUnifiedDiffView({
   after,
   language,
   isResizing,
-  isLargeFile,
   maxHeight,
   diffStyle,
 }: {
@@ -1100,13 +1084,12 @@ const WrappedUnifiedDiffView = memo(function WrappedUnifiedDiffView({
   after: string
   language: string
   isResizing: boolean
-  isLargeFile: boolean
   maxHeight?: number
   diffStyle: DiffStyle
 }) {
   const { t } = useTranslation(['components', 'common'])
 
-  const shouldHighlight = !isResizing && language !== 'text' && !isLargeFile
+  const shouldHighlight = !isResizing && language !== 'text'
   const { output: beforeTokens } = useSyntaxHighlight(before, {
     lang: language,
     mode: 'tokens',
@@ -1168,7 +1151,7 @@ const WrappedUnifiedDiffView = memo(function WrappedUnifiedDiffView({
 
     visibleRows.push(
       <div key={i} ref={el => measureRef(i, el)} className={`flex items-stretch ${getLineBgClass(line.type)}`}>
-        <div className={`shrink-0 ${getGutterBgClass(line.type)}`} style={{ width: gutterWidth }}>
+        <div className="shrink-0" style={{ width: gutterWidth }}>
           {useChangeBars ? (
             <div className="flex items-stretch h-full">
               <div {...getChangeBarProps(line.type)} />

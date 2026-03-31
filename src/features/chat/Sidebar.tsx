@@ -3,11 +3,11 @@ import { SidePanel } from './sidebar/SidePanel'
 import { ProjectDialog } from './ProjectDialog'
 import { useDirectory } from '../../hooks'
 import { type ApiSession } from '../../api'
+import { useChatViewport } from './chatViewport'
 
-const MIN_WIDTH = 240
-const MAX_WIDTH = 480
-const DEFAULT_WIDTH = 288 // 18rem = 288px
-const RAIL_WIDTH = 49 // 3.05rem ≈ 49px
+function clampSidebarWidth(width: number, minWidth: number, maxWidth: number) {
+  return Math.min(Math.max(width, minWidth), maxWidth)
+}
 
 interface SidebarProps {
   isOpen: boolean
@@ -36,31 +36,24 @@ export const Sidebar = memo(function Sidebar({
 }: SidebarProps) {
   const [isProjectDialogOpen, setIsProjectDialogOpen] = useState(false)
   const { addDirectory, pathInfo } = useDirectory()
-  const [isMobile, setIsMobile] = useState(false)
+  const { interaction, layout, actions } = useChatViewport()
+  const isOverlay = interaction.sidebarBehavior === 'overlay'
+  const touchCapable = interaction.touchCapable
   const isProjectDialogVisible = isProjectDialogOpen || !!projectDialogOpen
 
-  // Resizable state
-  const [width, setWidth] = useState(() => {
-    try {
-      const saved = localStorage.getItem('sidebar-width')
-      return saved ? Math.min(Math.max(parseInt(saved), MIN_WIDTH), MAX_WIDTH) : DEFAULT_WIDTH
-    } catch {
-      return DEFAULT_WIDTH
-    }
-  })
   const [isResizing, setIsResizing] = useState(false)
   const sidebarRef = useRef<HTMLDivElement>(null)
-  const currentWidthRef = useRef(width)
+  const currentWidthRef = useRef(layout.sidebar.openWidth)
   const rafRef = useRef<number>(0)
 
   const handleAddProject = useCallback(
     (path: string) => {
       addDirectory(path)
-      if (!isMobile) {
+      if (!isOverlay) {
         onOpen()
       }
     },
-    [addDirectory, isMobile, onOpen],
+    [addDirectory, isOverlay, onOpen],
   )
 
   const closeProjectDialog = useCallback(() => {
@@ -68,18 +61,19 @@ export const Sidebar = memo(function Sidebar({
     onProjectDialogClose?.()
   }, [onProjectDialogClose])
 
-  // 检测移动端 (md breakpoint = 768px)
-  useEffect(() => {
-    const checkMobile = () => setIsMobile(window.innerWidth < 768)
-    checkMobile()
-    window.addEventListener('resize', checkMobile)
-    return () => window.removeEventListener('resize', checkMobile)
-  }, [])
+  const persistSidebarWidth = useCallback(
+    (nextWidth: number) => {
+      const finalWidth = clampSidebarWidth(nextWidth, layout.sidebar.hardMinWidth, layout.sidebar.resizeMaxWidth)
+      actions.setSidebarRequestedWidth(finalWidth)
+      setIsResizing(false)
+      return finalWidth
+    },
+    [actions, layout.sidebar.hardMinWidth, layout.sidebar.resizeMaxWidth],
+  )
 
-  // Resize logic (desktop only) — 纯 DOM 操作，不触发 React re-render
   const startResizing = useCallback(
     (e: React.MouseEvent) => {
-      if (isMobile) return
+      if (isOverlay) return
       e.preventDefault()
 
       const sidebar = sidebarRef.current
@@ -92,7 +86,11 @@ export const Sidebar = memo(function Sidebar({
       const handleMouseMove = (moveEvent: MouseEvent) => {
         if (rafRef.current) cancelAnimationFrame(rafRef.current)
         rafRef.current = requestAnimationFrame(() => {
-          const newWidth = Math.min(Math.max(moveEvent.clientX, MIN_WIDTH), MAX_WIDTH)
+          const newWidth = clampSidebarWidth(
+            moveEvent.clientX,
+            layout.sidebar.hardMinWidth,
+            layout.sidebar.resizeMaxWidth,
+          )
           sidebar.style.width = `${newWidth}px`
           currentWidthRef.current = newWidth
         })
@@ -104,31 +102,66 @@ export const Sidebar = memo(function Sidebar({
         document.body.style.userSelect = ''
         document.removeEventListener('mousemove', handleMouseMove)
         document.removeEventListener('mouseup', handleMouseUp)
-
-        // 拖拽结束：同步 state + 持久化
-        const finalWidth = currentWidthRef.current
-        setWidth(finalWidth)
-        setIsResizing(false)
-        localStorage.setItem('sidebar-width', finalWidth.toString())
+        persistSidebarWidth(currentWidthRef.current)
       }
 
       document.addEventListener('mousemove', handleMouseMove)
       document.addEventListener('mouseup', handleMouseUp)
     },
-    [isMobile],
+    [isOverlay, layout.sidebar.hardMinWidth, layout.sidebar.resizeMaxWidth, persistSidebarWidth],
   )
 
-  // 同步 width state → ref（isOpen 切换时 width 可能从外部改变）
-  useEffect(() => {
-    currentWidthRef.current = width
-  }, [width])
+  const startTouchResizing = useCallback(
+    (e: React.TouchEvent) => {
+      if (isOverlay || !touchCapable || e.touches.length !== 1) return
+      e.preventDefault()
 
-  // 移动端遮罩点击关闭
+      const sidebar = sidebarRef.current
+      if (!sidebar) return
+
+      setIsResizing(true)
+      document.body.style.userSelect = 'none'
+
+      const handleTouchMove = (moveEvent: TouchEvent) => {
+        if (moveEvent.touches.length !== 1) return
+        moveEvent.preventDefault()
+        if (rafRef.current) cancelAnimationFrame(rafRef.current)
+        rafRef.current = requestAnimationFrame(() => {
+          const newWidth = clampSidebarWidth(
+            moveEvent.touches[0].clientX,
+            layout.sidebar.hardMinWidth,
+            layout.sidebar.resizeMaxWidth,
+          )
+          sidebar.style.width = `${newWidth}px`
+          currentWidthRef.current = newWidth
+        })
+      }
+
+      const handleTouchEnd = () => {
+        if (rafRef.current) cancelAnimationFrame(rafRef.current)
+        document.body.style.userSelect = ''
+        document.removeEventListener('touchmove', handleTouchMove)
+        document.removeEventListener('touchend', handleTouchEnd)
+        document.removeEventListener('touchcancel', handleTouchEnd)
+        persistSidebarWidth(currentWidthRef.current)
+      }
+
+      document.addEventListener('touchmove', handleTouchMove, { passive: false })
+      document.addEventListener('touchend', handleTouchEnd)
+      document.addEventListener('touchcancel', handleTouchEnd)
+    },
+    [isOverlay, layout.sidebar.hardMinWidth, layout.sidebar.resizeMaxWidth, persistSidebarWidth, touchCapable],
+  )
+
+  useEffect(() => {
+    currentWidthRef.current = layout.sidebar.openWidth
+  }, [layout.sidebar.openWidth])
+
   const handleBackdropClick = useCallback(() => {
-    if (isMobile && isOpen) {
+    if (isOverlay && isOpen) {
       onClose()
     }
-  }, [isMobile, isOpen, onClose])
+  }, [isOverlay, isOpen, onClose])
 
   const handleToggle = useCallback(() => {
     if (isOpen) {
@@ -138,23 +171,16 @@ export const Sidebar = memo(function Sidebar({
     }
   }, [isOpen, onClose, onOpen])
 
-  // 选择 session 后在移动端关闭侧边栏
   const handleSelectSession = useCallback(
     (session: ApiSession) => {
       onSelectSession(session)
-      if (isMobile) {
+      if (isOverlay) {
         onClose()
       }
     },
-    [onSelectSession, isMobile, onClose],
+    [onClose, onSelectSession, isOverlay],
   )
 
-  // ============================================
-  // 移动端：Sidebar 完全不占位，作为 overlay 显示
-  // 支持触摸滑动关闭
-  // ============================================
-
-  // 滑动关闭手势状态
   const touchStartX = useRef(0)
   const touchDeltaX = useRef(0)
   const [swipeX, setSwipeX] = useState(0)
@@ -170,7 +196,6 @@ export const Sidebar = memo(function Sidebar({
 
   const handleSidebarTouchMove = useCallback((e: React.TouchEvent) => {
     const deltaX = e.touches[0].clientX - touchStartX.current
-    // 只有向左滑时才触发
     if (deltaX < -10) {
       isSwiping.current = true
       setIsSwipingActive(true)
@@ -181,7 +206,6 @@ export const Sidebar = memo(function Sidebar({
 
   const handleSidebarTouchEnd = useCallback(() => {
     if (isSwiping.current && touchDeltaX.current < -80) {
-      // 滑动超过 80px，关闭侧边栏
       onClose()
     }
     isSwiping.current = false
@@ -190,10 +214,9 @@ export const Sidebar = memo(function Sidebar({
     setSwipeX(0)
   }, [onClose])
 
-  if (isMobile) {
+  if (isOverlay) {
     return (
       <>
-        {/* Mobile Backdrop */}
         <div
           className={`
             fixed left-0 right-0 bg-[hsl(var(--always-black)/0.4)] z-30
@@ -204,39 +227,36 @@ export const Sidebar = memo(function Sidebar({
           onClick={handleBackdropClick}
         />
 
-        {/* Mobile Sidebar Overlay */}
         <div
           onTouchStart={handleSidebarTouchStart}
           onTouchMove={handleSidebarTouchMove}
           onTouchEnd={handleSidebarTouchEnd}
           className={`
-            fixed left-0 z-40 
-            flex flex-col bg-bg-100 shadow-xl
+            fixed left-0 z-40
+            flex flex-col bg-bg-100 shadow-lg
             ${isSwipingActive ? '' : 'transition-transform duration-300 ease-out'}
             ${isOpen ? 'translate-x-0' : '-translate-x-full'}
           `}
           style={{
-            width: `${DEFAULT_WIDTH}px`,
-            transform: isOpen ? `translateX(${Math.min(0, swipeX)}px)` : `translateX(-100%)`,
+            width: `${layout.sidebar.overlayWidth}px`,
+            transform: isOpen ? `translateX(${Math.min(0, swipeX)}px)` : 'translateX(-100%)',
             top: 'var(--safe-area-inset-top)',
             height: 'calc(100% - var(--safe-area-inset-top))',
           }}
         >
-          {/* 和桌面端展开时一样的内容 */}
           <SidePanel
             onNewSession={onNewSession}
             onSelectSession={handleSelectSession}
             onCloseMobile={onClose}
             selectedSessionId={selectedSessionId}
             isMobile={true}
-            isExpanded={true} // 移动端展开时始终是 expanded 状态
-            onToggleSidebar={onClose} // 移动端 toggle 就是关闭
+            isExpanded={true}
+            onToggleSidebar={onClose}
             contextLimit={contextLimit}
             onOpenSettings={onOpenSettings}
           />
         </div>
 
-        {/* Project Dialog */}
         <ProjectDialog
           isOpen={isProjectDialogVisible}
           onClose={closeProjectDialog}
@@ -247,16 +267,13 @@ export const Sidebar = memo(function Sidebar({
     )
   }
 
-  // ============================================
-  // 桌面端：Sidebar 始终在原位置，可展开/收起为 rail
-  // ============================================
   return (
     <>
       <div
         ref={sidebarRef}
-        style={{ width: isOpen ? `${width}px` : `${RAIL_WIDTH}px` }}
+        style={{ width: `${layout.sidebar.dockedWidth}px` }}
         className={`
-          relative flex flex-col h-full bg-bg-100 overflow-hidden shrink-0
+          relative flex flex-col h-full bg-bg-100 overflow-hidden shrink-0 min-w-0
           border-r border-border-200/50
           ${isResizing ? 'transition-none' : 'transition-[width] duration-300 ease-out'}
         `}
@@ -273,20 +290,25 @@ export const Sidebar = memo(function Sidebar({
           onOpenSettings={onOpenSettings}
         />
 
-        {/* Resizer Handle (Desktop only, when expanded) */}
         {isOpen && (
           <div
             className={`
-              absolute top-0 right-0 w-1 h-full cursor-col-resize z-50
-              hover:bg-accent-main-100/50 transition-colors
-              ${isResizing ? 'bg-accent-main-100' : 'bg-transparent'}
+              absolute top-0 right-0 h-full cursor-col-resize z-50 touch-none bg-transparent
+              ${touchCapable ? 'w-4' : 'w-1'}
             `}
             onMouseDown={startResizing}
-          />
+            onTouchStart={startTouchResizing}
+          >
+            <div
+              aria-hidden="true"
+              className={`absolute top-0 bottom-0 right-0 transition-colors ${touchCapable ? 'w-1 rounded-full' : 'w-full'} ${
+                isResizing ? 'bg-accent-main-100' : 'bg-transparent hover:bg-accent-main-100/50'
+              }`}
+            />
+          </div>
         )}
       </div>
 
-      {/* Project Dialog */}
       <ProjectDialog
         isOpen={isProjectDialogVisible}
         onClose={closeProjectDialog}
