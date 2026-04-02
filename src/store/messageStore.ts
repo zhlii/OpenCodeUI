@@ -25,6 +25,8 @@ class MessageStore {
   private currentSessionId: string | null = null
   private subscribers = new Set<Subscriber>()
   private sessionAccessTime = new Map<string, number>()
+  /** 被分屏 pane 保护的 sessionId 集合，evict 时跳过 */
+  private protectedSessions = new Set<string>()
   private pendingNotify = false
   private rafId: number | null = null
   // delta 批量化：追踪被 mutable 修改过的消息，在 notify 前统一做不可变快照
@@ -204,6 +206,7 @@ class MessageStore {
 
     for (const [id, time] of this.sessionAccessTime) {
       if (id === this.currentSessionId) continue
+      if (this.protectedSessions.has(id)) continue
       const state = this.sessions.get(id)
       if (state?.isStreaming) continue
       if (time < oldestTime) {
@@ -217,6 +220,16 @@ class MessageStore {
       this.sessions.delete(oldestId)
       this.sessionAccessTime.delete(oldestId)
     }
+  }
+
+  /** 保护 sessionId 不被 evict（分屏 pane 使用） */
+  protectSession(sessionId: string) {
+    this.protectedSessions.add(sessionId)
+  }
+
+  /** 取消保护（pane 关闭或切换 session 时调用） */
+  unprotectSession(sessionId: string) {
+    this.protectedSessions.delete(sessionId)
   }
 
   updateSessionMetadata(

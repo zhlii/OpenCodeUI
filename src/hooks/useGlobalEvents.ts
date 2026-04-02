@@ -101,7 +101,7 @@ function dispatchToConsumers(sessionId: string, invoke: (cb: SessionEventCallbac
 }
 
 /** 检查是否有任何消费者关心此 sessionId */
-function hasConsumerForSession(sessionId: string): boolean {
+export function hasConsumerForSession(sessionId: string): boolean {
   for (const consumer of sessionConsumers.values()) {
     if (!consumer.sessionId) continue
     if (consumer.sessionId === sessionId) return true

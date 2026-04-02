@@ -13,7 +13,13 @@ import {
   useActiveSessionStore,
   type RevertHistoryItem,
 } from '../store'
-import { useSessionManager, useGlobalEvents, registerSessionConsumer, updateConsumerSessionId } from '../hooks'
+import {
+  useSessionManager,
+  useGlobalEvents,
+  registerSessionConsumer,
+  updateConsumerSessionId,
+  hasConsumerForSession,
+} from '../hooks'
 import {
   usePermissions,
   useRouter,
@@ -98,15 +104,22 @@ export function useChatSession({
   // Agents
   const [agents, setAgents] = useState<ApiAgent[]>([])
   const [selectedAgent, setSelectedAgentRaw] = useState<string>(() => {
+    // 多实例模式：不从全局 storage 读，避免 pane 间 agent 互相干扰
+    if (isMultiInstance) return ''
     return serverStorage.get(STORAGE_KEY_SELECTED_AGENT) || ''
   })
   const [restoredContent, setRestoredContent] = useState<{ sessionId: string; content: RevertHistoryItem } | null>(null)
 
-  // 封装 setSelectedAgent：同步写入 serverStorage（按服务器隔离）
-  const setSelectedAgent = useCallback((agentName: string) => {
-    setSelectedAgentRaw(agentName)
-    serverStorage.set(STORAGE_KEY_SELECTED_AGENT, agentName)
-  }, [])
+  // 封装 setSelectedAgent：单实例同步写入 serverStorage（按服务器隔离），多实例纯 local
+  const setSelectedAgent = useCallback(
+    (agentName: string) => {
+      setSelectedAgentRaw(agentName)
+      if (!isMultiInstance) {
+        serverStorage.set(STORAGE_KEY_SELECTED_AGENT, agentName)
+      }
+    },
+    [isMultiInstance],
+  )
 
   // Hooks
   const { resetPermissions } = usePermissions()
@@ -248,8 +261,12 @@ export function useChatSession({
     () => ({
       onPermissionAsked: (request: import('../api').ApiPermissionRequest) => {
         // Full Auto 会话级：当前 session 的 handler 天然只处理当前 session 的请求
+        // 多实例模式读 per-pane 模式；单实例模式读全局模式
         // 全局模式已在 useGlobalEvents 层拦截，这里只需判断 session 模式
-        if (autoApproveStore.fullAutoMode === 'session') {
+        const effectiveFullAutoMode = consumerId
+          ? autoApproveStore.getPaneFullAutoMode(consumerId)
+          : autoApproveStore.fullAutoMode
+        if (effectiveFullAutoMode === 'session') {
           handlePermissionReply(request.id, 'once', effectiveDirectory)
           return
         }
@@ -587,7 +604,10 @@ export function useChatSession({
   // New chat handler
   const handleNewChat = useCallback(() => {
     if (routeSessionId) {
-      messageStore.clearSession(routeSessionId)
+      // 只有没有其他 consumer（分屏 pane）在用这个 session 时才清除 store 数据
+      if (!hasConsumerForSession(routeSessionId)) {
+        messageStore.clearSession(routeSessionId)
+      }
     }
     resetPermissions()
     resetPendingRequests()

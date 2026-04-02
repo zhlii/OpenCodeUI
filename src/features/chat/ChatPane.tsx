@@ -27,6 +27,7 @@ import { ChatViewportProvider, type ChatViewportValue } from './chatViewport'
 import { SessionNavigationContext } from '../../contexts/SessionNavigationContext'
 import { paneLayoutStore } from '../../store/paneLayoutStore'
 import { autoApproveStore } from '../../store/autoApproveStore'
+import { messageStore } from '../../store'
 import { restoreModelSelection } from '../../utils/sessionHelpers'
 import { findModelByKey } from '../../utils/modelUtils'
 import { useTheme } from '../../hooks/useTheme'
@@ -117,7 +118,9 @@ export function ChatPane({ paneId, sessionId, isFocused, paneCount }: ChatPanePr
   const fullAutoHintTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   useEffect(() => {
-    return autoApproveStore.onFullAutoChange(mode => {
+    return autoApproveStore.onFullAutoChange((mode, changePaneId) => {
+      // 只响应全局变更（changePaneId 为 undefined）或本 pane 的变更
+      if (changePaneId && changePaneId !== paneId) return
       if (fullAutoHintTimerRef.current) clearTimeout(fullAutoHintTimerRef.current)
       const label =
         mode === 'global'
@@ -128,7 +131,7 @@ export function ChatPane({ paneId, sessionId, isFocused, paneCount }: ChatPanePr
       setFullAutoHint(label)
       fullAutoHintTimerRef.current = setTimeout(() => setFullAutoHint(null), 2000)
     })
-  }, [t])
+  }, [t, paneId])
 
   // ============================================
   // Pane-local navigation
@@ -234,6 +237,20 @@ export function ChatPane({ paneId, sessionId, isFocused, paneCount }: ChatPanePr
     skipGlobalSync: true,
     consumerId: paneId,
   })
+
+  // ============================================
+  // Protect session from eviction while this pane is viewing it
+  // ============================================
+  useEffect(() => {
+    if (routeSessionId) {
+      messageStore.protectSession(routeSessionId)
+    }
+    return () => {
+      if (routeSessionId) {
+        messageStore.unprotectSession(routeSessionId)
+      }
+    }
+  }, [routeSessionId])
 
   // ============================================
   // Cancel Hint
