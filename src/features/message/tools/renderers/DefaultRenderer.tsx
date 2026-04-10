@@ -104,6 +104,7 @@ function OutputBlock({ tool, data, isActive, hasError, hasOutput, compact }: Out
               filePath={file.filePath}
               diff={
                 file.diff ||
+                file.patch ||
                 (file.before !== undefined && file.after !== undefined
                   ? { before: file.before, after: file.after }
                   : undefined)
