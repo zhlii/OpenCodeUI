@@ -41,6 +41,7 @@
     "worktrees": "Worktrees",
     "tab": "标签",
     "addTab": "添加标签",
+    "renameTerminal": "重命名终端",
     "moveToRight": "移动到右侧面板",
     "moveToBottom": "移动到底部面板",
     "mcpServers": "MCP 服务器"
