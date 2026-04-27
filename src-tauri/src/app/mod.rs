@@ -57,6 +57,24 @@ fn create_main_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, ta
         .build()
 }
 
+#[cfg(target_os = "android")]
+fn create_main_window(app: &tauri::AppHandle) -> Result<tauri::WebviewWindow, tauri::Error> {
+    if let Some(window) = app.get_webview_window("main") {
+        return Ok(window);
+    }
+
+    let config = app
+        .config()
+        .app
+        .windows
+        .iter()
+        .find(|window| window.label == "main")
+        .cloned()
+        .expect("main window config missing");
+
+    tauri::WebviewWindowBuilder::from_config(app, &config)?.build()
+}
+
 #[cfg(not(target_os = "android"))]
 fn create_hidden_content_window(
     app: &tauri::AppHandle,
@@ -172,6 +190,11 @@ pub fn run() {
 
                 #[cfg(debug_assertions)]
                 main_window.open_devtools();
+            }
+
+            #[cfg(target_os = "android")]
+            {
+                let _main_window = create_main_window(&app.handle())?;
             }
 
             // Desktop: 解析 CLI 参数，存入 pending state
